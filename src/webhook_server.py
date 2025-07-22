@@ -48,6 +48,10 @@ def create_flask_app() -> Flask:
     from src.database import init_connection_pool
     init_connection_pool()
     
+    # Apply critical database migrations
+    from src.database import apply_conversation_table_fix
+    apply_conversation_table_fix()
+    
     # Initialize and START Telegram application immediately
     global telegram_app
     telegram_app = create_application()

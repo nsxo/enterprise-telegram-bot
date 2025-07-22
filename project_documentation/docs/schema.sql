@@ -72,9 +72,8 @@ CREATE TABLE conversations (
     last_user_message_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     notes TEXT,
-    -- Ensure one open topic per user per admin group
-    UNIQUE (user_id, admin_group_id, status) 
-        DEFERRABLE INITIALLY DEFERRED
+    -- Ensure one open topic per user per admin group (simplified constraint)
+    UNIQUE (user_id, admin_group_id)
 );
 
 -- Enhanced Transactions Table: Complete financial audit trail
@@ -205,11 +204,6 @@ CREATE TRIGGER update_bot_settings_modtime
     BEFORE UPDATE ON bot_settings
     FOR EACH ROW
     EXECUTE FUNCTION update_bot_settings_timestamp();
-
--- Constraint to ensure conversation uniqueness per user/group when open
-CREATE UNIQUE INDEX idx_conversations_user_group_open 
-    ON conversations (user_id, admin_group_id) 
-    WHERE status = 'open';
 
 -- Functions for common operations
 CREATE OR REPLACE FUNCTION get_bot_setting(setting_key VARCHAR)

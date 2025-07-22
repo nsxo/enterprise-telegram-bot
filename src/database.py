@@ -212,12 +212,12 @@ def create_conversation_topic(user_id: int, admin_group_id: int, topic_id: int, 
     query = """
         INSERT INTO conversations (user_id, admin_group_id, topic_id, pinned_message_id, last_user_message_at, created_at)
         VALUES (%s, %s, %s, %s, NOW(), NOW())
-        ON CONFLICT (user_id, admin_group_id, status) 
+        ON CONFLICT (user_id, admin_group_id) 
         DO UPDATE SET 
             topic_id = EXCLUDED.topic_id,
             pinned_message_id = EXCLUDED.pinned_message_id,
-            last_user_message_at = NOW()
-        WHERE conversations.status = 'open';
+            last_user_message_at = NOW(),
+            status = 'open';
     """
     execute_query(query, (user_id, admin_group_id, topic_id, pinned_message_id))
 
@@ -387,5 +387,77 @@ def get_revenue_analytics(days: int = 30) -> List[Dict[str, Any]]:
     return execute_query(query, (days,), fetch_all=True)
 
 
+# =============================================================================
+# DATABASE MIGRATIONS
+# =============================================================================
+
+def apply_conversation_table_fix() -> None:
+    """
+    Apply critical fix for conversations table constraint issue.
+    This addresses the ON CONFLICT deferrable constraint problem.
+    """
+    try:
+        logger.info("🔧 Applying conversations table constraint fix...")
+        
+        # First, check if the problematic constraint exists
+        check_constraint_query = """
+            SELECT constraint_name 
+            FROM information_schema.table_constraints 
+            WHERE table_name = 'conversations' 
+            AND constraint_type = 'UNIQUE'
+            AND constraint_name LIKE '%deferrable%'
+        """
+        result = execute_query(check_constraint_query, fetch_all=True)
+        
+        if result:
+            logger.info("Found deferrable constraint, dropping and recreating...")
+            
+            # Drop the problematic constraint
+            drop_constraint_query = """
+                ALTER TABLE conversations 
+                DROP CONSTRAINT IF EXISTS conversations_user_id_admin_group_id_status_key
+            """
+            execute_query(drop_constraint_query)
+            
+            # Add the simple constraint
+            add_constraint_query = """
+                ALTER TABLE conversations 
+                ADD CONSTRAINT conversations_user_admin_unique 
+                UNIQUE (user_id, admin_group_id)
+            """
+            execute_query(add_constraint_query)
+            
+            logger.info("✅ Conversations table constraint fixed successfully")
+        else:
+            logger.info("No problematic constraint found, checking for correct constraint...")
+            
+            # Check if our desired constraint exists
+            check_correct_query = """
+                SELECT constraint_name 
+                FROM information_schema.table_constraints 
+                WHERE table_name = 'conversations' 
+                AND constraint_type = 'UNIQUE'
+                AND constraint_name = 'conversations_user_admin_unique'
+            """
+            result = execute_query(check_correct_query, fetch_one=True)
+            
+            if not result:
+                logger.info("Adding missing unique constraint...")
+                add_constraint_query = """
+                    ALTER TABLE conversations 
+                    ADD CONSTRAINT conversations_user_admin_unique 
+                    UNIQUE (user_id, admin_group_id)
+                """
+                execute_query(add_constraint_query)
+                logger.info("✅ Added conversations unique constraint")
+            else:
+                logger.info("✅ Conversations constraint already correct")
+                
+    except Exception as e:
+        logger.error(f"Failed to apply conversations table fix: {e}")
+        # Don't raise - this is a migration, let the app continue
+
+
+# =============================================================================
 # Connection pool will be initialized when Flask app starts
 # init_connection_pool() - moved to Flask app factory 
