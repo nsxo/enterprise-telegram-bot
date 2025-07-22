@@ -1,0 +1,159 @@
+# .cursorrules
+# Enterprise Telegram Bot - AI Development Guidelines
+# Based on comprehensive architectural review
+
+## General Python Rules
+
+# Code Quality and Style
+- All generated Python code must be fully compliant with the Black code style
+- All functions, methods, and classes must include comprehensive Google-style docstrings
+- All function signatures must include PEP 484 type hints for all arguments and return values
+- Use f-strings for all string formatting. Do not use the + operator or .format()
+- All file I/O operations must use `with open(...)` to ensure resources are properly managed
+- Follow PEP 8 naming conventions: snake_case for functions/variables, PascalCase for classes
+
+## Architectural & Library-Specific Rules
+
+# Database Layer (CRITICAL)
+- All direct database interactions must be encapsulated within functions in the `src/database.py` module
+- No other module should contain raw SQL queries or direct psycopg2 calls
+- Every database function that executes a query must use the `get_db_connection` context manager
+- MUST use `psycopg2.pool.ThreadedConnectionPool`, never `SimpleConnectionPool` (thread safety requirement)
+- Do not manage connections manually with getconn() or putconn() - always use the context manager
+- All database queries must use parameterized queries (%s) to prevent SQL injection
+- Use the enhanced schema with ENUM types and proper foreign key relationships
+
+# Telegram Bot Development (python-telegram-bot)
+- For all InlineKeyboardButtons, do not use simple strings for callback_data
+- The "arbitrary callback data" feature is enabled, so use Python tuples or dataclasses for all callback data payloads
+- Use CommandHandler for commands like /start, /balance, /billing
+- Use CallbackQueryHandler for inline keyboard callbacks  
+- Use MessageHandler for conversation routing and topic management
+- Always implement proper error handling with try-except blocks for Telegram API calls
+- Use `context.bot.create_forum_topic` for topic creation with proper admin group management
+- Implement rate limiting to respect Telegram's API limits (30 msg/sec global, 1 msg/sec per chat)
+
+# Stripe Integration (SECURITY CRITICAL)
+- All state-changing (POST) API calls to the Stripe API must include an `idempotency_key` parameter
+- Generate idempotency keys using the `uuid` module: `str(uuid.uuid4())`
+- The `/stripe-webhook` endpoint must perform `stripe.Webhook.construct_event` signature verification as the very first operation
+- Do not process the event payload until the signature has been successfully verified
+- Handle all Stripe webhook events according to the comprehensive event lifecycle table
+- Store transaction records with proper status tracking (pending, completed, failed, refunded)
+
+# Flask Webhook Server
+- Use Flask application factory pattern for webhook server creation
+- Implement exactly three endpoints: `/telegram-webhook`, `/stripe-webhook`, `/health`
+- Always return appropriate HTTP status codes (200, 400, 403, 500)
+- Use JSON responses consistently with `jsonify()`
+- For Telegram webhooks: Accept POST requests, deserialize to Update objects, respond quickly
+- For Stripe webhooks: Verify signatures first, handle events by type, log all activities
+
+## Security Rules (NON-NEGOTIABLE)
+
+# Environment Security
+- Never hardcode secrets such as API keys, tokens, or database URLs directly in the source code
+- Always retrieve them from environment variables using `os.environ.get('VARIABLE_NAME')` pattern
+- Validate all required environment variables at application startup in `src/config.py`
+- Use strong, randomly generated secrets for webhook URLs and signing keys
+
+# Data Security
+- Treat all data received from users in Telegram updates as untrusted
+- Sanitize and validate input where appropriate before using it in database queries or API calls
+- Implement proper authentication and authorization for admin functions
+- Never log sensitive data (tokens, keys, user personal information)
+
+# Webhook Security
+- Webhook endpoints must implement signature verification (Telegram secret token, Stripe signature)
+- Reject requests with invalid or missing signatures immediately (403 Forbidden)
+- Implement rate limiting for webhook endpoints to prevent abuse
+
+## Conversation & State Management
+
+# ConversationHandler Patterns
+- Use nested ConversationHandlers for complex multi-step admin interfaces
+- Implement proper state transitions with `map_to_parent` for hierarchical menus
+- Use arbitrary callback data for stateful inline keyboard interactions
+- Handle InvalidCallbackData patterns for expired or invalid callback data
+
+# Topic Management
+- Implement robust topic creation with database-first approach (check existing before creating)
+- Use two-stage fallback for admin reply routing: direct reply inference, then topic ID lookup
+- Generate proper deep links to topics using the format: `t.me/c/{chat_id_short}/{topic_id}`
+- Handle topic lifecycle changes gracefully (closed topics, banned users, etc.)
+
+## Performance & Scalability
+
+# Connection Pooling
+- Size connection pool according to Gunicorn worker configuration
+- Use formula: `pool_size >= (gunicorn_workers * gunicorn_threads)`
+- Configure pool settings via environment variables for production tuning
+- Monitor connection usage and implement proper connection lifecycle management
+
+# Asynchronous Processing
+- Offload long-running tasks to background workers via task queues
+- Respond to webhooks quickly (within 60 seconds) to avoid Telegram timeouts
+- Implement proper error handling and retry logic with exponential backoff
+- Use rate limiting queues for bulk message sending operations
+
+## Testing & Quality Assurance
+
+# Error Handling
+- Implement comprehensive error handling in `src/error_handler.py`
+- Use specific exception types, not generic `Exception` catching
+- Provide meaningful error messages for debugging and user feedback
+- Log errors with sufficient context for troubleshooting
+
+# Code Organization
+- Follow the defined project structure: `src/` for core logic, `scripts/` for utilities
+- Keep functions small and focused (Single Responsibility Principle)
+- Extract repeated code into reusable functions (DRY principle)
+- Use meaningful names that explain purpose and behavior
+
+# Documentation
+- Document complex algorithms and business logic thoroughly
+- Include usage examples in docstrings for non-trivial functions
+- Maintain API documentation for webhook endpoints
+- Update schema documentation when making database changes
+
+## Development Workflow
+
+# Git and Versioning
+- Use GitHub Flow: main branch is always production-ready
+- Create feature branches from main for all new work
+- Use meaningful commit messages following conventional commit format
+- Ensure pre-commit hooks pass before committing
+
+# Code Quality Automation
+- Use Black for code formatting (automatic)
+- Use Ruff for linting and import sorting (automatic)
+- Use Gitleaks for secret scanning (security critical)
+- All hooks must pass before code can be committed
+
+# Testing Strategy
+- Write unit tests for all critical business logic functions
+- Test database operations with proper setup/teardown
+- Mock external services (Telegram, Stripe) in tests
+- Implement integration tests for webhook endpoints
+
+## Production Deployment
+
+# Docker Configuration
+- Use multi-stage Dockerfile for optimized production images
+- Run as non-root user for security
+- Configure proper health checks for container orchestration
+- Use specific Python version tags for reproducibility
+
+# Environment Configuration
+- Validate all required environment variables at startup
+- Use proper environment variable types (int, bool) with validation
+- Implement configuration validation in `src/config.py`
+- Separate development and production configurations
+
+# Monitoring and Observability
+- Implement comprehensive health checks that test all dependencies
+- Log all critical operations with appropriate log levels
+- Monitor webhook endpoint availability with external services
+- Track performance metrics and error rates
+
+This comprehensive rule set ensures all generated code follows enterprise-grade standards for security, performance, maintainability, and scalability. 

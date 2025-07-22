@@ -1,0 +1,38 @@
+# Enterprise Telegram Bot - Dependencies
+# Based on PROJECT_BLUEPRINT.md tech stack and enhanced architecture
+
+# Core Framework
+flask>=3.0.0
+gunicorn>=21.2.0
+
+# Telegram Bot Library
+python-telegram-bot[ext]>=21.0.0
+python-telegram-bot[callback-data]>=21.0.0
+
+# Database
+psycopg2-binary>=2.9.9
+
+# Payments
+stripe>=7.0.0
+
+# Environment Management
+python-dotenv>=1.0.0
+
+# Development & Quality (for local development)
+black>=23.12.0
+ruff>=0.1.15
+pre-commit>=3.6.0
+
+# Security
+cryptography>=41.0.0
+
+# Caching (future enhancement)
+redis>=5.0.0
+
+# Monitoring & Logging
+structlog>=23.2.0
+
+# Testing (future enhancement)
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.12.0 
