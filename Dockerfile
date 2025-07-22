@@ -55,6 +55,7 @@ COPY --chown=appuser:appuser docs/ ./docs/
 COPY --chown=appuser:appuser project_documentation/ ./project_documentation/
 COPY --chown=appuser:appuser env.template ./env.template
 COPY --chown=appuser:appuser test_app.py ./test_app.py
+COPY --chown=appuser:appuser simple_server.py ./simple_server.py
 
 # Create logs directory
 RUN mkdir -p /app/logs && chown appuser:appuser /app/logs
@@ -71,4 +72,4 @@ EXPOSE ${PORT:-8000}
 
 # Command to run the application using Gunicorn production server
 # Use environment variables for configuration
-CMD ["python", "test_app.py"] 
+CMD ["python", "simple_server.py"] 
