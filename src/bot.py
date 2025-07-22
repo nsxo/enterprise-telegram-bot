@@ -130,11 +130,12 @@ def format_user_info_card(user_data: Dict[str, Any]) -> str:
 
 async def get_or_create_user_topic(context: ContextTypes.DEFAULT_TYPE, user: User) -> int:
     """
-    Core conversation bridge function. Gets existing topic or creates new one.
+    Get existing topic ID or create new topic for user.
+    Handles deleted topics by recreating them.
     
     Args:
-        context: PTB context object
-        user: Telegram User object
+        context: Telegram context
+        user: User object
         
     Returns:
         Topic ID for the user's conversation thread
@@ -146,7 +147,18 @@ async def get_or_create_user_topic(context: ContextTypes.DEFAULT_TYPE, user: Use
     existing_topic_id = db.get_topic_id_from_user(user.id, ADMIN_GROUP_ID)
     if existing_topic_id:
         logger.info(f"Found existing topic {existing_topic_id} for user {user.id}")
-        return existing_topic_id
+        
+        # Test if topic still exists by trying to send a test message
+        try:
+            # Try to get the topic info (this will fail if topic was deleted)
+            await context.bot.get_chat(chat_id=ADMIN_GROUP_ID)
+            # If we get here, the topic should exist, return it
+            return existing_topic_id
+        except Exception as e:
+            logger.warning(f"Topic {existing_topic_id} for user {user.id} may have been deleted: {e}")
+            # Clean up the database record and create a new topic
+            db.delete_conversation_topic(user.id, ADMIN_GROUP_ID)
+            logger.info(f"Cleaned up deleted topic record for user {user.id}")
     
     # Create new topic
     topic_name = f"👤 {user.first_name}"
@@ -964,10 +976,12 @@ async def purchase_product_callback(update: Update, context: ContextTypes.DEFAUL
         # Create checkout session
         try:
             from src.stripe_utils import create_checkout_session
+            from src.config import WEBHOOK_URL
             
-            # Build URLs (you may need to adjust these)
-            success_url = "https://telegram.me/your_bot?start=success"
-            cancel_url = "https://telegram.me/your_bot?start=cancel"
+            # Build proper URLs using the Railway domain
+            base_url = WEBHOOK_URL or "https://independent-art-production-51fb.up.railway.app"
+            success_url = f"{base_url}/success"
+            cancel_url = f"{base_url}/cancel"
             
             checkout_url = create_checkout_session(
                 user_id=user.id,
@@ -1196,13 +1210,31 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Update last message timestamp
         db.update_last_message_time(user.id, ADMIN_GROUP_ID)
         
-        # Forward message to admin group topic
-        await context.bot.forward_message(
-            chat_id=ADMIN_GROUP_ID,
-            from_chat_id=message.chat_id,
-            message_id=message.message_id,
-            message_thread_id=topic_id
-        )
+        # Forward message to admin group topic with error recovery
+        try:
+            await context.bot.forward_message(
+                chat_id=ADMIN_GROUP_ID,
+                from_chat_id=message.chat_id,
+                message_id=message.message_id,
+                message_thread_id=topic_id
+            )
+        except TelegramError as forward_error:
+            if "thread not found" in str(forward_error).lower():
+                logger.warning(f"Topic {topic_id} not found during forward, recreating...")
+                # Clean up and recreate topic
+                db.delete_conversation_topic(user.id, ADMIN_GROUP_ID)
+                new_topic_id = await get_or_create_user_topic(context, user)
+                
+                # Try forwarding again with new topic
+                await context.bot.forward_message(
+                    chat_id=ADMIN_GROUP_ID,
+                    from_chat_id=message.chat_id,
+                    message_id=message.message_id,
+                    message_thread_id=new_topic_id
+                )
+                logger.info(f"✅ Message forwarded to recreated topic {new_topic_id}")
+            else:
+                raise forward_error  # Re-raise if it's a different error
         
         # Send acknowledgment to user
         await message.reply_text("✅ Message received! Our team will respond shortly.")
@@ -1321,6 +1353,17 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             pass
 
 
+async def debug_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Catch-all callback handler for debugging."""
+    query = update.callback_query
+    await query.answer()
+    logger.warning(f"Unhandled callback query from user {query.from_user.id}: {query.data}")
+    await query.edit_message_text(
+        "❌ **This button is not yet implemented.**\n\n"
+        "Please use /start to get a fresh menu."
+    )
+
+
 # =============================================================================
 # APPLICATION SETUP
 # =============================================================================
@@ -1375,6 +1418,9 @@ def create_application() -> Application:
     
     # Add invalid callback data handler
     application.add_handler(CallbackQueryHandler(callback_data_error_handler, pattern=InvalidCallbackData))
+    
+    # Add catch-all callback handler for debugging (must be last)
+    application.add_handler(CallbackQueryHandler(debug_callback_handler))
     
     # Add message handler (must be last)
     application.add_handler(MessageHandler(filters.ALL, master_message_handler))

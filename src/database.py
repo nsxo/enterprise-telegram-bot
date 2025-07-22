@@ -222,6 +222,16 @@ def create_conversation_topic(user_id: int, admin_group_id: int, topic_id: int, 
     execute_query(query, (user_id, admin_group_id, topic_id, pinned_message_id))
 
 
+def delete_conversation_topic(user_id: int, admin_group_id: int) -> None:
+    """Delete conversation topic record when topic is manually deleted."""
+    query = """
+        DELETE FROM conversations 
+        WHERE user_id = %s AND admin_group_id = %s
+    """
+    execute_query(query, (user_id, admin_group_id))
+    logger.info(f"Deleted conversation record for user {user_id}")
+
+
 def get_user_id_from_topic(topic_id: int, admin_group_id: int) -> Optional[int]:
     """Get user ID associated with topic."""
     query = """
