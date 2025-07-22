@@ -418,25 +418,47 @@ def start_telegram_application() -> None:
     global telegram_app
     if telegram_app:
         try:
-            # Start Telegram app in background thread
+            # Create a background task to process the update queue
             def run_telegram_app():
                 import asyncio
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    loop.run_until_complete(telegram_app.initialize())
-                    loop.run_until_complete(telegram_app.start())
-                    logger.info("✅ Telegram application started and processing updates")
-                    loop.run_forever()
+                    async def process_updates():
+                        await telegram_app.initialize()
+                        await telegram_app.start()
+                        logger.info("✅ Telegram application started and processing updates")
+                        
+                        # Process updates from the queue continuously
+                        while True:
+                            try:
+                                # Get update from queue with timeout
+                                update = await asyncio.wait_for(
+                                    telegram_app.update_queue.get(), 
+                                    timeout=1.0
+                                )
+                                
+                                # Process the update
+                                await telegram_app.process_update(update)
+                                
+                            except asyncio.TimeoutError:
+                                # No update received, continue loop
+                                continue
+                            except Exception as e:
+                                logger.error(f"Error processing update: {e}")
+                                continue
+                    
+                    loop.run_until_complete(process_updates())
+                    
                 except Exception as e:
                     logger.error(f"Telegram app error: {e}")
                 finally:
                     loop.close()
-            
+
             # Start in background thread
             telegram_thread = threading.Thread(target=run_telegram_app, daemon=True)
             telegram_thread.start()
-            
+
         except Exception as e:
             logger.error(f"Failed to start Telegram application: {e}")
             raise
