@@ -1,1 +1,1 @@
-web: python railway_test.py 
+web: gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 30 --worker-class sync src.webhook_server:app 
