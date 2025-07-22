@@ -145,7 +145,7 @@ async def handle_returning_user_welcome(update: Update, context: ContextTypes.DE
         "{tip}\n\n" \
         "Ready to continue our conversation?"
     
-    tip = bot_utils.get_usage_tip(credits)
+    tip = bot_utils.bot_utils.get_usage_tip(credits)
     
     formatted_message = welcome_template.format(
         name=user.first_name,
@@ -758,7 +758,7 @@ async def time_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /dashboard command - direct access to admin dashboard."""
     # Check admin authorization first
-    if not await require_admin(update, context):
+    if not await bot_utils.require_admin(update, context):
         return
     
     await admin_dashboard_callback(update, context)
@@ -767,7 +767,7 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /settings command."""
     # Check admin authorization first
-    if not await require_admin(update, context):
+    if not await bot_utils.require_admin(update, context):
         return
         
     await update.message.reply_text(
@@ -780,7 +780,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def products_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /products command."""
     # Check admin authorization first
-    if not await require_admin(update, context):
+    if not await bot_utils.require_admin(update, context):
         return
         
     try:
@@ -804,7 +804,7 @@ async def products_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def analytics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /analytics command."""
     # Check admin authorization first
-    if not await require_admin(update, context):
+    if not await bot_utils.require_admin(update, context):
         return
         
     try:
@@ -829,7 +829,7 @@ async def analytics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /users command."""
     # Check admin authorization first
-    if not await require_admin(update, context):
+    if not await bot_utils.require_admin(update, context):
         return
         
     await update.message.reply_text(
@@ -842,7 +842,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def conversations_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /conversations command."""
     # Check admin authorization first
-    if not await require_admin(update, context):
+    if not await bot_utils.require_admin(update, context):
         return
         
     await update.message.reply_text(
@@ -855,7 +855,7 @@ async def conversations_command(update: Update, context: ContextTypes.DEFAULT_TY
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /broadcast command."""
     # Check admin authorization first
-    if not await require_admin(update, context):
+    if not await bot_utils.require_admin(update, context):
         return
         
     await update.message.reply_text(
@@ -868,7 +868,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def webhook_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /webhook command."""
     # Check admin authorization first
-    if not await require_admin(update, context):
+    if not await bot_utils.require_admin(update, context):
         return
         
     await update.message.reply_text(
@@ -882,7 +882,7 @@ async def webhook_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def system_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /system command."""
     # Check admin authorization first
-    if not await require_admin(update, context):
+    if not await bot_utils.require_admin(update, context):
         return
         
     try:
@@ -2647,7 +2647,7 @@ async def show_analytics_callback(update: Update, context: ContextTypes.DEFAULT_
 • Credits Used: {total_messages}
 
 💡 **Recommendation:**
-{get_usage_tip(credits)}
+{bot_utils.get_usage_tip(credits)}
 
 *More detailed analytics coming soon!*
         """.strip()

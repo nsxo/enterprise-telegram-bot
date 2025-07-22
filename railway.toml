@@ -1,0 +1,27 @@
+[build]
+# Build configuration
+command = "echo 'Building Enterprise Telegram Bot...'"
+
+[deploy]
+# Deployment configuration
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Start command
+startCommand = "gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 120 --access-logfile - --error-logfile - src.webhook_server:app"
+
+[environments.production]
+# Production environment settings
+variables = { }
+
+# Ensure clean deployments by disabling build cache when needed
+[build.production]
+watchIgnore = [".git", "*.md", "docs/", "project_documentation/"]
+
+# Auto-deployment settings
+[deploy.production]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+replicas = 1  # Single instance to avoid conflicts 
