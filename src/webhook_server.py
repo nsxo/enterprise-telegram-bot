@@ -451,6 +451,8 @@ def before_first_request():
 import atexit
 atexit.register(shutdown_telegram_application)
 
+# Create the Flask app for Gunicorn to import
+app = create_flask_app()
 
 if __name__ == '__main__':
     """
