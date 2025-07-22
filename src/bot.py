@@ -198,15 +198,15 @@ async def send_user_info_card(context: ContextTypes.DEFAULT_TYPE, user_id: int, 
         # Format info card
         info_text = format_user_info_card(user_data)
         
-        # Create admin action buttons using arbitrary callback data
+        # Create admin action buttons using string callback data
         keyboard = [
             [
-                InlineKeyboardButton("🚫 Ban User", callback_data=("admin_ban", user_id)),
-                InlineKeyboardButton("🎁 Gift Credits", callback_data=("admin_gift", user_id)),
+                InlineKeyboardButton("🚫 Ban User", callback_data=f"admin_ban_{user_id}"),
+                InlineKeyboardButton("🎁 Gift Credits", callback_data=f"admin_gift_{user_id}"),
             ],
             [
-                InlineKeyboardButton("📊 Full History", callback_data=("admin_history", user_id)),
-                InlineKeyboardButton("⬆️ Upgrade Tier", callback_data=("admin_tier", user_id)),
+                InlineKeyboardButton("📊 Full History", callback_data=f"admin_history_{user_id}"),
+                InlineKeyboardButton("⬆️ Upgrade Tier", callback_data=f"admin_tier_{user_id}"),
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -403,6 +403,161 @@ async def quick_buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except Exception as e:
         logger.error(f"Quick buy error: {e}")
         await message.reply_text("❌ Payment system temporarily unavailable.")
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /help command - show available commands."""
+    user = update.effective_user
+    logger.info(f"Help command from user {user.id}")
+    
+    help_text = (
+        "🤖 **Available Commands**\n\n"
+        "**Basic Commands:**\n"
+        "• /start - Welcome message and product store\n"
+        "• /balance - Check your credit balance\n"
+        "• /billing - Manage payment methods\n"
+        "• /help - Show this help message\n\n"
+        "**Quick Purchase:**\n"
+        "• /buy10 - Buy 10 credits\n"
+        "• /buy25 - Buy 25 credits\n"
+        "• /buy50 - Buy 50 credits\n\n"
+        "**Status Commands:**\n"
+        "• /status - Check your account status\n"
+        "• /time - Check time-based access\n\n"
+        "**Need Help?**\n"
+        "Just send a message and our team will respond!"
+    )
+    
+    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
+
+
+async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /buy command - show product selection."""
+    user = update.effective_user
+    logger.info(f"Buy command from user {user.id}")
+    
+    try:
+        # Get active products
+        products = db.get_active_products()
+        if not products:
+            await update.message.reply_text(
+                "❌ No products available at the moment.\n\n"
+                "Please try again later or contact support."
+            )
+            return
+        
+        # Group products by type
+        credits_products = [p for p in products if p['product_type'] == 'credits']
+        time_products = [p for p in products if p['product_type'] == 'time']
+        
+        # Create product buttons
+        keyboard = []
+        
+        if credits_products:
+            keyboard.append([InlineKeyboardButton("💎 Credit Packages", callback_data="product_type_credits")])
+        
+        if time_products:
+            keyboard.append([InlineKeyboardButton("⏰ Time Packages", callback_data="product_type_time")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = (
+            "🛒 **Purchase Options**\n\n"
+            "Choose what you'd like to buy:\n\n"
+        )
+        
+        if credits_products:
+            text += "💎 **Credit Packages** - Pay per message\n"
+        if time_products:
+            text += "⏰ **Time Packages** - Unlimited access for a period\n"
+        
+        await update.message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+    except Exception as e:
+        logger.error(f"Buy command failed for user {user.id}: {e}")
+        await update.message.reply_text("❌ Error loading products. Please try again later.")
+
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /status command - show account status."""
+    user = update.effective_user
+    logger.info(f"Status command from user {user.id}")
+    
+    try:
+        # Get user data
+        user_data = db.get_user(user.id)
+        if not user_data:
+            await update.message.reply_text("❌ User account not found. Please use /start to initialize.")
+            return
+        
+        # Get tier information
+        tier_name = "Standard"  # Default, could get from database
+        
+        # Format status message
+        status_text = (
+            f"📊 **Account Status**\n\n"
+            f"**User:** {user.first_name}\n"
+            f"**Tier:** {tier_name}\n"
+            f"**Credits:** {user_data.get('message_credits', 0)}\n"
+            f"**Status:** {'✅ Active' if not user_data.get('is_banned', False) else '❌ Banned'}\n\n"
+        )
+        
+        # Add time access info if available
+        time_expires = user_data.get('time_credits_expires_at')
+        if time_expires:
+            status_text += f"**Time Access:** Expires {time_expires}\n\n"
+        else:
+            status_text += "**Time Access:** None\n\n"
+        
+        status_text += "Use /balance for detailed balance info or /buy to purchase more credits."
+        
+        await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
+        
+    except Exception as e:
+        logger.error(f"Status command failed for user {user.id}: {e}")
+        await update.message.reply_text("❌ Error loading status. Please try again later.")
+
+
+async def time_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /time command - show time-based access info."""
+    user = update.effective_user
+    logger.info(f"Time command from user {user.id}")
+    
+    try:
+        # Get user data
+        user_data = db.get_user(user.id)
+        if not user_data:
+            await update.message.reply_text("❌ User account not found. Please use /start to initialize.")
+            return
+        
+        time_expires = user_data.get('time_credits_expires_at')
+        
+        if time_expires:
+            time_text = (
+                f"⏰ **Time-Based Access**\n\n"
+                f"**Status:** ✅ Active\n"
+                f"**Expires:** {time_expires}\n"
+                f"**Access:** Unlimited messages until expiry\n\n"
+                f"Use /buy to extend your time access or purchase credits."
+            )
+        else:
+            time_text = (
+                f"⏰ **Time-Based Access**\n\n"
+                f"**Status:** ❌ No active time access\n"
+                f"**Access:** Credit-based messaging only\n\n"
+                f"Purchase time packages for unlimited messaging!\n"
+                f"Use /buy to see available time packages."
+            )
+        
+        await update.message.reply_text(time_text, parse_mode=ParseMode.MARKDOWN)
+        
+    except Exception as e:
+        logger.error(f"Time command failed for user {user.id}: {e}")
+        await update.message.reply_text("❌ Error loading time access info. Please try again later.")
 
 
 # =============================================================================
@@ -869,8 +1024,12 @@ async def admin_ban_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
     
-    # Extract user ID from callback data
-    _, target_user_id = query.data
+    # Extract user ID from callback data (format: "admin_ban_12345")
+    try:
+        target_user_id = int(query.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await query.edit_message_text("❌ Invalid admin action. Please try again.")
+        return
     
     admin_user = query.from_user
     logger.info(f"Admin ban action: {admin_user.id} banning {target_user_id}")
@@ -895,8 +1054,12 @@ async def admin_gift_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     
-    # Extract user ID from callback data
-    _, target_user_id = query.data
+    # Extract user ID from callback data (format: "admin_gift_12345")
+    try:
+        target_user_id = int(query.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await query.edit_message_text("❌ Invalid admin action. Please try again.")
+        return
     
     # Show gift options
     keyboard = [
@@ -1190,6 +1353,10 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("broadcast", broadcast_command))
     application.add_handler(CommandHandler("webhook", webhook_command))
     application.add_handler(CommandHandler("system", system_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("buy", buy_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("time", time_command))
     
     # Add quick buy command handlers
     for amount in [10, 25, 50, 100]:
@@ -1202,9 +1369,9 @@ def create_application() -> Application:
     application.add_handler(CallbackQueryHandler(billing_portal_callback, pattern="^billing_portal$"))
     
     # Add admin callback handlers
-    application.add_handler(CallbackQueryHandler(admin_ban_callback, pattern="admin_ban"))
-    application.add_handler(CallbackQueryHandler(admin_gift_callback, pattern="admin_gift"))
-    application.add_handler(CallbackQueryHandler(gift_credits_callback, pattern="gift_credits"))
+    application.add_handler(CallbackQueryHandler(admin_ban_callback, pattern="^admin_ban_"))
+    application.add_handler(CallbackQueryHandler(admin_gift_callback, pattern="^admin_gift_"))
+    application.add_handler(CallbackQueryHandler(gift_credits_callback, pattern="^gift_credits_"))
     
     # Add invalid callback data handler
     application.add_handler(CallbackQueryHandler(callback_data_error_handler, pattern=InvalidCallbackData))

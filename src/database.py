@@ -479,12 +479,78 @@ def apply_conversation_table_fix() -> None:
         # Don't raise - this is a migration, let the app continue
 
 
+def fix_products_table_schema() -> None:
+    """
+    Ensure the products table has all required columns.
+    This fixes schema mismatches from earlier deployments.
+    """
+    try:
+        logger.info("🔧 Checking and fixing products table schema...")
+        
+        # Check what columns exist in products table
+        check_columns_query = """
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'products' 
+            ORDER BY ordinal_position
+        """
+        existing_columns = execute_query(check_columns_query, fetch_all=True)
+        column_names = [col['column_name'] for col in existing_columns] if existing_columns else []
+        
+        logger.info(f"Existing products columns: {column_names}")
+        
+        # Define required columns and their definitions
+        required_columns = {
+            'stripe_price_id': 'VARCHAR(255) NOT NULL',
+            'product_type': 'VARCHAR(50) NOT NULL DEFAULT \'credits\'',
+            'name': 'VARCHAR(100) NOT NULL DEFAULT \'Unknown Product\'',
+            'description': 'TEXT',
+            'amount': 'INT NOT NULL DEFAULT 1',
+            'price_usd_cents': 'INT NOT NULL DEFAULT 100',
+            'sort_order': 'INT DEFAULT 0',
+            'is_active': 'BOOLEAN DEFAULT TRUE'
+        }
+        
+        # Add missing columns
+        for column_name, column_def in required_columns.items():
+            if column_name not in column_names:
+                try:
+                    alter_query = f"ALTER TABLE products ADD COLUMN {column_name} {column_def}"
+                    execute_query(alter_query)
+                    logger.info(f"✅ Added column: {column_name}")
+                except Exception as e:
+                    logger.error(f"Failed to add column {column_name}: {e}")
+        
+        # Ensure we have a unique constraint on stripe_price_id
+        try:
+            unique_constraint_query = """
+                ALTER TABLE products 
+                ADD CONSTRAINT products_stripe_price_id_unique 
+                UNIQUE (stripe_price_id)
+            """
+            execute_query(unique_constraint_query)
+            logger.info("✅ Added stripe_price_id unique constraint")
+        except Exception as e:
+            if "already exists" in str(e):
+                logger.info("✅ stripe_price_id constraint already exists")
+            else:
+                logger.warning(f"Could not add stripe_price_id constraint: {e}")
+        
+        logger.info("✅ Products table schema check completed")
+        
+    except Exception as e:
+        logger.error(f"Failed to fix products table schema: {e}")
+
+
 def ensure_sample_products() -> None:
     """
     Ensure sample products exist in database for testing.
     Call this during app startup if no products found.
     """
     try:
+        # First fix the schema
+        fix_products_table_schema()
+        
         # Check if products already exist
         existing_products = get_active_products()
         if existing_products:
