@@ -420,11 +420,12 @@ def start_telegram_application() -> None:
     global telegram_app
     if telegram_app:
         try:
-            # Initialize the application
+            # Initialize and start the application
             telegram_app.initialize()
-            logger.info("✅ Telegram application initialized")
+            telegram_app.start()
+            logger.info("✅ Telegram application started and processing updates")
         except Exception as e:
-            logger.error(f"Failed to initialize Telegram application: {e}")
+            logger.error(f"Failed to start Telegram application: {e}")
             raise
 
 
@@ -436,6 +437,7 @@ def shutdown_telegram_application() -> None:
     global telegram_app
     if telegram_app:
         try:
+            telegram_app.stop()
             telegram_app.shutdown()
             logger.info("✅ Telegram application shutdown complete")
         except Exception as e:
