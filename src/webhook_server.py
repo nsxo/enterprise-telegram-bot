@@ -435,28 +435,16 @@ def shutdown_telegram_application() -> None:
             logger.error(f"Error shutting down Telegram application: {e}")
 
 
-# Create Flask application instance
-app = create_flask_app()
-
-
-# Application lifecycle management
-@app.before_first_request
-def before_first_request():
-    """Initialize services before handling first request."""
-    try:
-        start_telegram_application()
-        logger.info("✅ Webhook server ready to handle requests")
-    except Exception as e:
-        logger.error(f"Failed to start services: {e}")
-        raise
-
-
 # Graceful shutdown
 import atexit
 atexit.register(shutdown_telegram_application)
 
 # Create the Flask app for Gunicorn to import
 app = create_flask_app()
+
+# Start Telegram application immediately after app creation
+start_telegram_application()
+logger.info("✅ Webhook server ready to handle requests")
 
 if __name__ == '__main__':
     """
