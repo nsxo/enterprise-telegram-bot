@@ -107,6 +107,7 @@ def get_env_bool(var_name: str, required: bool = True, default: Optional[bool] =
 
 BOT_TOKEN = get_env_var("BOT_TOKEN")
 ADMIN_GROUP_ID = get_env_int("ADMIN_GROUP_ID")
+ADMIN_USER_ID = get_env_int("ADMIN_USER_ID", required=False)  # Optional: exclude admin from threads
 WEBHOOK_URL = get_env_var("WEBHOOK_URL", required=False)
 
 # =============================================================================

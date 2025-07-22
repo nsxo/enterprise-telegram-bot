@@ -30,7 +30,7 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 from src import database as db
-from src.config import BOT_TOKEN, ADMIN_GROUP_ID
+from src.config import BOT_TOKEN, ADMIN_GROUP_ID, ADMIN_USER_ID
 
 logger = logging.getLogger(__name__)
 
@@ -1003,6 +1003,19 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     user = update.effective_user
     message = update.message
     
+    # Exclude admin user from getting their own thread
+    if ADMIN_USER_ID and user.id == ADMIN_USER_ID:
+        logger.info(f"Admin user {user.id} sent private message, not creating thread")
+        await message.reply_text(
+            "🔧 **Admin Mode**\n\n"
+            "You are configured as an admin user. Please use the admin group to manage conversations.\n\n"
+            "Commands available:\n"
+            "• /admin - Admin dashboard\n"
+            "• /users - User management\n"
+            "• /analytics - View analytics"
+        )
+        return
+    
     logger.info(f"User message from {user.id}: {message.text[:50] if message.text else 'Media'}")
     
     # Ensure user exists in database
@@ -1020,7 +1033,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Update last message timestamp
         db.update_last_message_time(user.id, ADMIN_GROUP_ID)
         
-        # Forward message to admin topic
+        # Forward message to admin group topic
         await context.bot.forward_message(
             chat_id=ADMIN_GROUP_ID,
             from_chat_id=message.chat_id,
@@ -1065,10 +1078,18 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if not target_user_id:
         logger.warning(f"Could not find target user for topic {message.message_thread_id}")
+        # Send helpful message to admin
+        await message.reply_text(
+            "⚠️ **Cannot route message**\n\n"
+            "Could not find the user for this topic. This might happen if:\n"
+            "• The topic was manually created\n" 
+            "• Database sync issues\n\n"
+            "Try replying directly to a user's message instead."
+        )
         return
     
     try:
-        # Forward admin message to user
+        # Send message to user (copy instead of forward for better UX)
         await context.bot.copy_message(
             chat_id=target_user_id,
             from_chat_id=message.chat_id,
@@ -1086,12 +1107,18 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
         
     except Exception as e:
         logger.error(f"Failed to deliver admin message: {e}")
-        # React with X to indicate failure
+        # React with X to indicate failure and provide feedback
         try:
             await context.bot.set_message_reaction(
                 chat_id=message.chat_id,
                 message_id=message.message_id,
                 reaction="❌"
+            )
+            await message.reply_text(
+                f"❌ **Message delivery failed**\n\n"
+                f"Could not send message to user {target_user_id}.\n"
+                f"Error: {str(e)[:100]}\n\n"
+                f"The user may have blocked the bot or there's a network issue."
             )
         except:
             pass

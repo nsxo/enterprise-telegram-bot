@@ -428,15 +428,51 @@ def apply_conversation_table_fix() -> None:
     try:
         logger.info("🔧 Applying conversations table constraint fix...")
         
-        # Simple approach: just try to add the constraint we need
-        # If it already exists, PostgreSQL will give us an error we can ignore
+        # Step 1: Drop any existing problematic constraints
+        drop_constraints_queries = [
+            "ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_user_id_admin_group_id_status_key",
+            "ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_user_id_admin_group_id_key",
+            "DROP INDEX IF EXISTS idx_conversations_user_group_open"
+        ]
+        
+        for query in drop_constraints_queries:
+            try:
+                execute_query(query)
+                logger.info(f"Executed: {query}")
+            except Exception as e:
+                logger.warning(f"Could not execute {query}: {e}")
+        
+        # Step 2: Add the simple constraint we need
         add_constraint_query = """
             ALTER TABLE conversations 
-            ADD CONSTRAINT IF NOT EXISTS conversations_user_admin_unique 
+            ADD CONSTRAINT conversations_user_admin_unique 
             UNIQUE (user_id, admin_group_id)
         """
-        execute_query(add_constraint_query)
-        logger.info("✅ Conversations table constraint ensured")
+        try:
+            execute_query(add_constraint_query)
+            logger.info("✅ Added conversations unique constraint")
+        except Exception as e:
+            if "already exists" in str(e):
+                logger.info("✅ Conversations constraint already exists")
+            else:
+                logger.error(f"Failed to add constraint: {e}")
+                
+        # Step 3: Clean up any duplicate conversations (keep the latest)
+        cleanup_query = """
+            DELETE FROM conversations 
+            WHERE id NOT IN (
+                SELECT DISTINCT ON (user_id, admin_group_id) id
+                FROM conversations 
+                ORDER BY user_id, admin_group_id, created_at DESC
+            )
+        """
+        try:
+            execute_query(cleanup_query)
+            logger.info("✅ Cleaned up duplicate conversations")
+        except Exception as e:
+            logger.warning(f"Could not clean up duplicates: {e}")
+                
+        logger.info("✅ Conversations table constraint fix completed")
                 
     except Exception as e:
         logger.error(f"Failed to apply conversations table fix: {e}")
