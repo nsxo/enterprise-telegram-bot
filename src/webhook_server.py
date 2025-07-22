@@ -7,6 +7,7 @@ with proper security, error handling, and monitoring for production deployment.
 
 import logging
 import json
+import threading
 from typing import Dict, Any
 from flask import Flask, request, jsonify
 from telegram import Update
@@ -417,10 +418,25 @@ def start_telegram_application() -> None:
     global telegram_app
     if telegram_app:
         try:
-            # Initialize and start the application
-            telegram_app.initialize()
-            telegram_app.start()
-            logger.info("✅ Telegram application started and processing updates")
+            # Start Telegram app in background thread
+            def run_telegram_app():
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(telegram_app.initialize())
+                    loop.run_until_complete(telegram_app.start())
+                    logger.info("✅ Telegram application started and processing updates")
+                    loop.run_forever()
+                except Exception as e:
+                    logger.error(f"Telegram app error: {e}")
+                finally:
+                    loop.close()
+            
+            # Start in background thread
+            telegram_thread = threading.Thread(target=run_telegram_app, daemon=True)
+            telegram_thread.start()
+            
         except Exception as e:
             logger.error(f"Failed to start Telegram application: {e}")
             raise
@@ -434,8 +450,19 @@ def shutdown_telegram_application() -> None:
     global telegram_app
     if telegram_app:
         try:
-            telegram_app.stop()
-            telegram_app.shutdown()
+            import asyncio
+            
+            # Get current event loop or create new one
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            # Run async shutdown operations
+            loop.run_until_complete(telegram_app.stop())
+            loop.run_until_complete(telegram_app.shutdown())
+            
             logger.info("✅ Telegram application shutdown complete")
         except Exception as e:
             logger.error(f"Error shutting down Telegram application: {e}")
