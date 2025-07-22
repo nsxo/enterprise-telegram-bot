@@ -94,7 +94,20 @@ def create_flask_app() -> Flask:
 
     # Initialize and START Telegram application immediately
     global telegram_app
-    telegram_app = create_application()
+    
+    # Create and initialize the Telegram application asynchronously
+    def initialize_telegram_app():
+        import asyncio
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            telegram_app = loop.run_until_complete(create_application())
+            return telegram_app
+        finally:
+            loop.close()
+    
+    telegram_app = initialize_telegram_app()
     start_telegram_application()
 
     # Register routes
