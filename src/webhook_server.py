@@ -43,6 +43,10 @@ def create_flask_app() -> Flask:
             format='%(asctime)s %(levelname)s %(name)s: %(message)s'
         )
     
+    # Initialize database connection pool
+    from src.database import init_connection_pool
+    init_connection_pool()
+    
     # Initialize Telegram application
     global telegram_app
     telegram_app = create_application()

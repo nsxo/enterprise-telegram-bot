@@ -387,5 +387,5 @@ def get_revenue_analytics(days: int = 30) -> List[Dict[str, Any]]:
     return execute_query(query, (days,), fetch_all=True)
 
 
-# Initialize connection pool on module import
-init_connection_pool() 
+# Connection pool will be initialized when Flask app starts
+# init_connection_pool() - moved to Flask app factory 
