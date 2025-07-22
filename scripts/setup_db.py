@@ -95,7 +95,70 @@ def setup_database() -> None:
         logger.info(f"Initial bot settings created: {settings_count}")
         
         connection.commit()
-        logger.info("✅ Database setup completed successfully!")
+        logger.info("✅ Database schema setup completed successfully")
+        
+        # Insert sample products for testing
+        logger.info("🛍️ Adding sample products...")
+        sample_products = [
+            {
+                'product_type': 'credits',
+                'name': '10 Credits Pack',
+                'description': 'Perfect for light usage - 10 message credits',
+                'stripe_price_id': 'price_10credits_test',  # You'll need to create these in Stripe
+                'amount': 10,
+                'price_usd_cents': 500,  # $5.00
+                'sort_order': 1
+            },
+            {
+                'product_type': 'credits', 
+                'name': '25 Credits Pack',
+                'description': 'Great value - 25 message credits',
+                'stripe_price_id': 'price_25credits_test',
+                'amount': 25,
+                'price_usd_cents': 1000,  # $10.00
+                'sort_order': 2
+            },
+            {
+                'product_type': 'credits',
+                'name': '50 Credits Pack', 
+                'description': 'Best value - 50 message credits',
+                'stripe_price_id': 'price_50credits_test',
+                'amount': 50,
+                'price_usd_cents': 1800,  # $18.00
+                'sort_order': 3
+            },
+            {
+                'product_type': 'time',
+                'name': '7 Days Access',
+                'description': 'Unlimited messages for 7 days',
+                'stripe_price_id': 'price_7days_test',
+                'amount': 7,
+                'price_usd_cents': 1500,  # $15.00
+                'sort_order': 4
+            },
+            {
+                'product_type': 'time',
+                'name': '30 Days Access',
+                'description': 'Unlimited messages for 30 days',
+                'stripe_price_id': 'price_30days_test', 
+                'amount': 30,
+                'price_usd_cents': 5000,  # $50.00
+                'sort_order': 5
+            }
+        ]
+        
+        for product in sample_products:
+            insert_query = """
+                INSERT INTO products (product_type, name, description, stripe_price_id, amount, price_usd_cents, sort_order, is_active)
+                VALUES (%(product_type)s, %(name)s, %(description)s, %(stripe_price_id)s, %(amount)s, %(price_usd_cents)s, %(sort_order)s, true)
+                ON CONFLICT (stripe_price_id) DO NOTHING;
+            """
+            cursor.execute(insert_query, product)
+        
+        logger.info(f"✅ Added {len(sample_products)} sample products")
+        
+        connection.commit()
+        logger.info("✅ Database setup and sample data insertion completed successfully")
         
     except psycopg2.Error as e:
         logger.error(f"❌ PostgreSQL error during setup: {e}")

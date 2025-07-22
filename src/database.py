@@ -443,6 +443,49 @@ def apply_conversation_table_fix() -> None:
         # Don't raise - this is a migration, let the app continue
 
 
+def ensure_sample_products() -> None:
+    """
+    Ensure sample products exist in database for testing.
+    Call this during app startup if no products found.
+    """
+    try:
+        # Check if products already exist
+        existing_products = get_active_products()
+        if existing_products:
+            logger.info(f"Found {len(existing_products)} existing products, skipping sample creation")
+            return
+        
+        logger.info("No products found, creating sample products...")
+        
+        sample_products = [
+            ('credits', '10 Credits Pack', 'Perfect for light usage - 10 message credits', 
+             'price_10credits_test', 10, 500, 1),
+            ('credits', '25 Credits Pack', 'Great value - 25 message credits',
+             'price_25credits_test', 25, 1000, 2),
+            ('credits', '50 Credits Pack', 'Best value - 50 message credits',
+             'price_50credits_test', 50, 1800, 3),
+            ('time', '7 Days Access', 'Unlimited messages for 7 days',
+             'price_7days_test', 7, 1500, 4),
+            ('time', '30 Days Access', 'Unlimited messages for 30 days',
+             'price_30days_test', 30, 5000, 5)
+        ]
+        
+        query = """
+            INSERT INTO products (product_type, name, description, stripe_price_id, 
+                                amount, price_usd_cents, sort_order, is_active)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, true)
+            ON CONFLICT (stripe_price_id) DO NOTHING
+        """
+        
+        for product_data in sample_products:
+            execute_query(query, product_data)
+        
+        logger.info(f"✅ Created {len(sample_products)} sample products")
+        
+    except Exception as e:
+        logger.error(f"Failed to create sample products: {e}")
+
+
 # =============================================================================
 # Connection pool will be initialized when Flask app starts
 # init_connection_pool() - moved to Flask app factory 

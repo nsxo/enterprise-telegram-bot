@@ -50,10 +50,15 @@ def create_flask_app() -> Flask:
     
     # Apply critical database migrations
     try:
-        from src.database import apply_conversation_table_fix
+        from src.database import apply_conversation_table_fix, ensure_sample_products
         logger.info("🔧 About to run database migration...")
         apply_conversation_table_fix()
         logger.info("✅ Database migration completed successfully")
+        
+        # Ensure we have sample products for testing
+        logger.info("🛍️ Ensuring sample products exist...")
+        ensure_sample_products()
+        logger.info("✅ Product setup completed")
     except Exception as e:
         logger.error(f"❌ Database migration failed: {e}")
         # Continue anyway - don't crash the app

@@ -246,26 +246,39 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user = update.effective_user
     logger.info(f"Start command from user {user.id} ({user.username})")
     
-    # Get or create user in database
-    db_user = db.get_or_create_user(
-        telegram_id=user.id,
-        username=user.username,
-        first_name=user.first_name,
-        last_name=user.last_name
-    )
-    
-    # Get welcome message from bot settings
-    welcome_message = db.get_bot_setting('welcome_message') or "Welcome to our Enterprise Telegram Bot! 🤖"
-    
-    # Create start button using arbitrary callback data
-    keyboard = [[InlineKeyboardButton("▶️ Start", callback_data=("show_products",))]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        welcome_message,
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN
-    )
+    try:
+        # Get or create user in database
+        db_user = db.get_or_create_user(
+            telegram_id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name
+        )
+        logger.info(f"User {user.id} created/retrieved from database")
+        
+        # Get welcome message from bot settings
+        try:
+            welcome_message = db.get_bot_setting('welcome_message') or "Welcome to our Enterprise Telegram Bot! 🤖"
+        except Exception as e:
+            logger.error(f"Failed to get welcome message: {e}")
+            welcome_message = "Welcome to our Enterprise Telegram Bot! 🤖"
+        
+        # Create start button using simple string for debugging
+        keyboard = [[InlineKeyboardButton("▶️ Start", callback_data="show_products")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            welcome_message,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        logger.info(f"Start command completed for user {user.id}")
+        
+    except Exception as e:
+        logger.error(f"Start command failed for user {user.id}: {e}")
+        await update.message.reply_text(
+            "❌ Sorry, there was an error. Please try again later."
+        )
 
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -553,83 +566,201 @@ async def show_products_callback(update: Update, context: ContextTypes.DEFAULT_T
     Show available products when Start button is clicked.
     """
     query = update.callback_query
-    await query.answer()
-    
     user = query.from_user
-    logger.info(f"Show products callback from user {user.id}")
     
-    # Get active products
-    products = db.get_active_products()
-    if not products:
-        await query.edit_message_text("❌ No products available at the moment.")
-        return
-    
-    # Group products by type
-    credits_products = [p for p in products if p['product_type'] == 'credits']
-    time_products = [p for p in products if p['product_type'] == 'time']
-    
-    # Create product buttons
-    keyboard = []
-    
-    if credits_products:
-        keyboard.append([InlineKeyboardButton("💎 Credit Packages", callback_data=("product_type", "credits"))])
-    
-    if time_products:
-        keyboard.append([InlineKeyboardButton("⏰ Time Packages", callback_data=("product_type", "time"))])
-    
-    keyboard.append([InlineKeyboardButton("🏦 Billing Settings", callback_data=("billing_portal",))])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "🛍️ **Choose a product category:**\n\n"
-        "Select what you'd like to purchase:",
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN
-    )
+    try:
+        await query.answer()
+        logger.info(f"Show products callback from user {user.id}")
+        
+        # Get active products with error handling
+        try:
+            products = db.get_active_products()
+            logger.info(f"Retrieved {len(products) if products else 0} products from database")
+        except Exception as e:
+            logger.error(f"Failed to get products: {e}")
+            await query.edit_message_text("❌ Error loading products. Please try again later.")
+            return
+        
+        if not products:
+            logger.warning("No products found in database")
+            await query.edit_message_text(
+                "❌ No products available at the moment.\n\n"
+                "Please contact support or try again later."
+            )
+            return
+        
+        # Group products by type
+        credits_products = [p for p in products if p['product_type'] == 'credits']
+        time_products = [p for p in products if p['product_type'] == 'time']
+        
+        logger.info(f"Found {len(credits_products)} credit products, {len(time_products)} time products")
+        
+        # Create product buttons
+        keyboard = []
+        
+        if credits_products:
+            keyboard.append([InlineKeyboardButton("💎 Credit Packages", callback_data="product_type_credits")])
+        
+        if time_products:
+            keyboard.append([InlineKeyboardButton("⏰ Time Packages", callback_data="product_type_time")])
+        
+        keyboard.append([InlineKeyboardButton("🏦 Billing Settings", callback_data="billing_portal")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Create product display text
+        text = (
+            "🛒 **Welcome to our Store!**\n\n"
+            "Choose what you'd like to purchase:\n\n"
+        )
+        
+        if credits_products:
+            text += "💎 **Credit Packages** - Pay per message\n"
+        if time_products:
+            text += "⏰ **Time Packages** - Unlimited access for a period\n"
+        
+        text += "\n🏦 **Billing Settings** - Manage your payment methods"
+        
+        await query.edit_message_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        logger.info(f"Products displayed successfully for user {user.id}")
+        
+    except Exception as e:
+        logger.error(f"Show products callback failed for user {user.id}: {e}")
+        try:
+            await query.edit_message_text("❌ Sorry, there was an error. Please try /start again.")
+        except:
+            pass
 
 
 async def product_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Show products of a specific type.
-    """
+    """Handle product type selection (credits or time)."""
     query = update.callback_query
-    await query.answer()
+    user = query.from_user
     
-    # Extract product type from callback data
-    _, product_type = query.data
+    try:
+        await query.answer()
+        
+        # Extract product type from callback data
+        callback_data = query.data
+        if callback_data == "product_type_credits":
+            product_type = "credits"
+            title = "💎 Credit Packages"
+            description = "Pay per message - buy credits to send messages"
+        elif callback_data == "product_type_time":
+            product_type = "time"
+            title = "⏰ Time Packages"
+            description = "Unlimited access for a specific time period"
+        else:
+            logger.error(f"Unknown product type callback: {callback_data}")
+            await query.edit_message_text("❌ Invalid selection. Please try again.")
+            return
+            
+        logger.info(f"Product type '{product_type}' selected by user {user.id}")
+        
+        # Get products of selected type
+        try:
+            all_products = db.get_active_products()
+            products = [p for p in all_products if p['product_type'] == product_type]
+        except Exception as e:
+            logger.error(f"Failed to get {product_type} products: {e}")
+            await query.edit_message_text("❌ Error loading products. Please try again.")
+            return
+        
+        if not products:
+            await query.edit_message_text(f"❌ No {product_type} packages available.")
+            return
+        
+        # Create product buttons
+        keyboard = []
+        text = f"**{title}**\n\n{description}\n\n"
+        
+        for product in products:
+            price_display = f"${product['price_usd_cents'] / 100:.2f}"
+            if product_type == "credits":
+                button_text = f"{product['amount']} Credits - {price_display}"
+            else:
+                button_text = f"{product['amount']} Days - {price_display}"
+            
+            keyboard.append([InlineKeyboardButton(
+                button_text, 
+                callback_data=f"purchase_product_{product['id']}"
+            )])
+            
+            text += f"• **{button_text}**\n"
+        
+        # Add back button
+        keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="show_products")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+        
+        logger.info(f"Displayed {len(products)} {product_type} products to user {user.id}")
+        
+    except Exception as e:
+        logger.error(f"Product type callback failed for user {user.id}: {e}")
+        await query.edit_message_text("❌ Error. Please try /start again.")
+
+
+async def billing_portal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle billing portal access."""
+    query = update.callback_query
+    user = query.from_user
     
-    logger.info(f"Product type callback: {product_type}")
-    
-    # Get products of this type
-    products = [p for p in db.get_active_products() if p['product_type'] == product_type]
-    
-    if not products:
-        await query.edit_message_text(f"❌ No {product_type} products available.")
-        return
-    
-    # Create product buttons
-    keyboard = []
-    for product in products:
-        price_dollars = product['price_usd_cents'] / 100
-        button_text = f"{product['name']} - ${price_dollars:.2f}"
-        keyboard.append([InlineKeyboardButton(
-            button_text, 
-            callback_data=("purchase_product", product['id'])
-        )])
-    
-    # Add back button
-    keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data=("show_products",))])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    type_emoji = "💎" if product_type == "credits" else "⏰"
-    await query.edit_message_text(
-        f"{type_emoji} **{product_type.title()} Products:**\n\n"
-        f"Choose a package:",
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN
-    )
+    try:
+        await query.answer()
+        logger.info(f"Billing portal requested by user {user.id}")
+        
+        # Check if user has made purchases
+        user_data = db.get_user(user.id)
+        if not user_data or not user_data.get('stripe_customer_id'):
+            await query.edit_message_text(
+                "🏦 **Billing Portal**\n\n"
+                "You need to make a purchase first before accessing billing settings.\n\n"
+                "Use the buttons below to browse our products!",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ Back to Products", callback_data="show_products")
+                ]])
+            )
+            return
+        
+        # Create billing portal session
+        try:
+            from src.stripe_utils import create_billing_portal_session
+            portal_url = create_billing_portal_session(user_data['stripe_customer_id'])
+            
+            keyboard = [
+                [InlineKeyboardButton("🏦 Open Billing Portal", url=portal_url)],
+                [InlineKeyboardButton("⬅️ Back", callback_data="show_products")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                "🏦 **Billing Portal**\n\n"
+                "Click below to access your billing portal where you can:\n"
+                "• View payment history\n"
+                "• Update payment methods\n"
+                "• Download invoices\n"
+                "• Manage subscriptions",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to create billing portal for user {user.id}: {e}")
+            await query.edit_message_text(
+                "❌ Unable to access billing portal right now. Please try again later.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ Back", callback_data="show_products")
+                ]])
+            )
+        
+    except Exception as e:
+        logger.error(f"Billing portal callback failed for user {user.id}: {e}")
+        await query.edit_message_text("❌ Error. Please try /start again.")
 
 
 async def purchase_product_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -637,46 +768,96 @@ async def purchase_product_callback(update: Update, context: ContextTypes.DEFAUL
     Handle product purchase initiation.
     """
     query = update.callback_query
-    await query.answer()
-    
-    # Extract product ID from callback data
-    _, product_id = query.data
-    
     user = query.from_user
-    logger.info(f"Purchase product callback: product {product_id} for user {user.id}")
-    
-    # Get product details
-    products = db.get_active_products()
-    product = next((p for p in products if p['id'] == product_id), None)
-    
-    if not product:
-        await query.edit_message_text("❌ Product not found.")
-        return
-    
-    # Import here to avoid circular imports
-    from src.stripe_utils import create_checkout_session
     
     try:
-        # Create Stripe checkout session
-        checkout_url = create_checkout_session(
-            user_id=user.id,
-            price_id=product['stripe_price_id']
-        )
+        await query.answer()
         
-        price_dollars = product['price_usd_cents'] / 100
+        # Extract product ID from callback data (format: "purchase_product_123")
+        callback_data = query.data
+        if not callback_data.startswith("purchase_product_"):
+            logger.error(f"Invalid purchase callback format: {callback_data}")
+            await query.edit_message_text("❌ Invalid selection. Please try again.")
+            return
+            
+        try:
+            product_id = int(callback_data.split("_")[-1])
+        except (ValueError, IndexError):
+            logger.error(f"Could not extract product ID from: {callback_data}")
+            await query.edit_message_text("❌ Invalid product selection. Please try again.")
+            return
         
-        await query.edit_message_text(
-            f"💳 **Purchase: {product['name']}**\n\n"
-            f"**Description:** {product.get('description', 'No description available')}\n"
-            f"**Price:** ${price_dollars:.2f}\n\n"
-            f"Click the link below to complete your purchase:\n"
-            f"[Complete Purchase]({checkout_url})",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        logger.info(f"Purchase product callback: product {product_id} for user {user.id}")
         
+        # Get product details
+        try:
+            products = db.get_active_products()
+            product = None
+            for p in products:
+                if p['id'] == product_id:
+                    product = p
+                    break
+        except Exception as e:
+            logger.error(f"Failed to get products: {e}")
+            await query.edit_message_text("❌ Error loading product. Please try again.")
+            return
+        
+        if not product:
+            await query.edit_message_text("❌ Product not found.")
+            return
+        
+        # Create checkout session
+        try:
+            from src.stripe_utils import create_checkout_session
+            
+            # Build URLs (you may need to adjust these)
+            success_url = "https://telegram.me/your_bot?start=success"
+            cancel_url = "https://telegram.me/your_bot?start=cancel"
+            
+            checkout_url = create_checkout_session(
+                user_id=user.id,
+                price_id=product['stripe_price_id'],
+                success_url=success_url,
+                cancel_url=cancel_url
+            )
+            
+            # Create purchase message
+            price_display = f"${product['price_usd_cents'] / 100:.2f}"
+            
+            if product['product_type'] == 'credits':
+                item_description = f"{product['amount']} Credits"
+            else:
+                item_description = f"{product['amount']} Days Access"
+            
+            keyboard = [
+                [InlineKeyboardButton("💳 Complete Purchase", url=checkout_url)],
+                [InlineKeyboardButton("⬅️ Back", callback_data=f"product_type_{product['product_type']}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"💳 **Purchase Confirmation**\n\n"
+                f"**Item:** {item_description}\n"
+                f"**Price:** {price_display}\n\n"
+                f"Click the button below to complete your secure payment via Stripe:",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            
+            logger.info(f"Checkout session created for user {user.id}, product {product_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to create checkout session for user {user.id}: {e}")
+            await query.edit_message_text(
+                "❌ Unable to process payment right now. Please try again later.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⬅️ Back", callback_data=f"product_type_{product['product_type']}")
+                ]])
+            )
+            
     except Exception as e:
-        logger.error(f"Purchase initiation failed: {e}")
-        await query.edit_message_text("❌ Unable to process purchase. Please try again later.")
+        logger.error(f"Purchase product callback failed for user {user.id}: {e}")
+        await query.edit_message_text("❌ Error. Please try /start again.")
 
 
 # =============================================================================
@@ -988,9 +1169,10 @@ def create_application() -> Application:
         application.add_handler(CommandHandler(f"buy{amount}", quick_buy_command))
     
     # Add callback query handlers
-    application.add_handler(CallbackQueryHandler(show_products_callback, pattern="show_products"))
-    application.add_handler(CallbackQueryHandler(product_type_callback, pattern="product_type"))
-    application.add_handler(CallbackQueryHandler(purchase_product_callback, pattern="purchase_product"))
+    application.add_handler(CallbackQueryHandler(show_products_callback, pattern="^show_products$"))
+    application.add_handler(CallbackQueryHandler(product_type_callback, pattern="^product_type_"))
+    application.add_handler(CallbackQueryHandler(purchase_product_callback, pattern="^purchase_product_"))
+    application.add_handler(CallbackQueryHandler(billing_portal_callback, pattern="^billing_portal$"))
     
     # Add admin callback handlers
     application.add_handler(CallbackQueryHandler(admin_ban_callback, pattern="admin_ban"))
