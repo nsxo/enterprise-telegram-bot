@@ -54,6 +54,7 @@ COPY --chown=appuser:appuser scripts/ ./scripts/
 COPY --chown=appuser:appuser docs/ ./docs/
 COPY --chown=appuser:appuser project_documentation/ ./project_documentation/
 COPY --chown=appuser:appuser env.template ./env.template
+COPY --chown=appuser:appuser test_app.py ./test_app.py
 
 # Create logs directory
 RUN mkdir -p /app/logs && chown appuser:appuser /app/logs
