@@ -99,8 +99,12 @@ class PluginManager:
 
             module_name = python_file.stem
             try:
-                # Import the module
-                module_path = f"src.plugins.{directory_path.name}.{module_name}"
+                # Import the module using the correct module path
+                # Convert absolute path to module path
+                relative_path = python_file.relative_to(
+                    Path(__file__).parent.parent
+                )
+                module_path = str(relative_path).replace('/', '.').replace('\\', '.')
                 module = importlib.import_module(module_path)
 
                 # Find plugin classes in the module
@@ -124,11 +128,14 @@ class PluginManager:
                             self.plugins[plugin_name] = plugin_instance
                             discovered += 1
                             logger.info(
-                                f"✅ Discovered plugin: {plugin_name} v{plugin_instance.version}"
+                                f"✅ Discovered plugin: {plugin_name} "
+                                f"v{plugin_instance.version}"
                             )
 
                         except Exception as e:
-                            logger.error(f"Failed to instantiate plugin {name}: {e}")
+                            logger.error(
+                                f"Failed to instantiate plugin {name}: {e}"
+                            )
                             self.failed_plugins[name] = str(e)
 
             except Exception as e:
