@@ -260,4 +260,4 @@ def periodic_cache_cleanup() -> None:
         logger.error(f"Cache cleanup failed: {e}")
 
 
-logger.info("Cache module initialized") 
+logger.info("Cache module initialized")
