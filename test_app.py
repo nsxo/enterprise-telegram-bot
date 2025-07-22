@@ -5,6 +5,7 @@ Minimal Flask test app for Railway deployment testing
 
 from flask import Flask, jsonify
 import os
+import sys
 
 app = Flask(__name__)
 
@@ -14,7 +15,7 @@ def hello():
         'status': 'ok',
         'message': 'Hello from Railway!',
         'port': os.environ.get('PORT', '8000'),
-        'python_version': os.sys.version
+        'python_version': sys.version
     })
 
 @app.route('/health')
