@@ -70,4 +70,4 @@ EXPOSE ${PORT:-8000}
 
 # Command to run the application using Gunicorn production server
 # Use environment variables for configuration
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-8000} --workers ${GUNICORN_WORKERS:-4} --timeout ${GUNICORN_TIMEOUT:-30} --worker-class ${GUNICORN_WORKER_CLASS:-sync} --access-logfile - --error-logfile - src.webhook_server:app"] 
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-8000} --workers 2 --timeout 30 --worker-class sync --access-logfile - --error-logfile - test_app:app"] 
