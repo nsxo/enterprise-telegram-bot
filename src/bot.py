@@ -193,7 +193,7 @@ async def handle_returning_user_welcome(update: Update, context: ContextTypes.DE
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Enhanced /balance command with visual progress bars and personalized tips.
+    Enhanced /balance command with comprehensive balance information.
     """
     user = update.effective_user
     logger.info(f"Balance command from user {user.id}")
@@ -208,19 +208,18 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Create balance card using bot_utils
         balance_card = bot_utils.create_balance_card(user_data)
         
-        # Create action buttons
         keyboard = [
             [
+                InlineKeyboardButton("🔄 Refresh", callback_data="refresh_balance"),
+                InlineKeyboardButton("📊 Analytics", callback_data="show_analytics")
+            ],
+            [
                 InlineKeyboardButton("🛒 Buy Credits", callback_data="show_products"),
-                InlineKeyboardButton("💎 Premium Plans", callback_data="show_premium")
+                InlineKeyboardButton("💳 Billing Portal", callback_data="billing_portal")
             ],
             [
-                InlineKeyboardButton("📊 Analytics", callback_data="show_analytics"),
-                InlineKeyboardButton("🔄 Refresh", callback_data="refresh_balance")
-            ],
-            [
-                InlineKeyboardButton("💰 Quick Buy 10", callback_data="quick_buy_10"),
-                InlineKeyboardButton("🏆 Quick Buy 25", callback_data="quick_buy_25")
+                InlineKeyboardButton("💬 Start Chatting", callback_data="start_chatting"),
+                InlineKeyboardButton("🏠 Main Menu", callback_data="user_menu")
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -233,7 +232,7 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
     except Exception as e:
         logger.error(f"Balance command failed for user {user.id}: {e}")
-        await update.message.reply_text("❌ Error retrieving balance. Please try again.")
+        await update.message.reply_text("❌ Error loading balance. Please try again.")
 
 
 async def send_quick_buy_warning(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -406,7 +405,7 @@ async def handle_returning_user_welcome(update: Update, context: ContextTypes.DE
     )
     
     # Add balance card
-    balance_card = create_balance_card(user_data)
+    balance_card = bot_utils.create_balance_card(user_data)
     welcome_text += f"\n\n{balance_card}"
     
     # Smart keyboard based on balance
@@ -445,132 +444,102 @@ async def handle_returning_user_welcome(update: Update, context: ContextTypes.DE
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Enhanced /balance command with visual card and smart quick actions.
+    Enhanced /balance command with comprehensive balance information.
     """
     user = update.effective_user
     logger.info(f"Balance command from user {user.id}")
     
-    # Get user data
-    user_data = db.get_user_dashboard_data(user.id)
-    if not user_data:
-        await update.message.reply_text("❌ User not found. Please use /start first.")
-        return
-    
-    # Create enhanced balance card
-    balance_card = create_balance_card(user_data)
-    credits = user_data.get('message_credits', 0)
-    
-    # Smart quick actions based on balance
-    keyboard = []
-    
-    # Show quick buy options if credits are low
-    if credits <= int(db.get_bot_setting('quick_buy_trigger_threshold') or '5'):
-        keyboard.extend([
-            [InlineKeyboardButton("🚀 Quick Buy 25 Credits - $10", callback_data="quick_buy_25")],
-            [InlineKeyboardButton("⏰ Try Daily Unlimited - $3", callback_data="daily_unlimited")]
-        ])
-    else:
-        keyboard.append([InlineKeyboardButton("🛒 View All Packages", callback_data="show_products")])
-    
-    # Always show these options
-    keyboard.extend([
-        [
-            InlineKeyboardButton("📊 Usage Analytics", callback_data="show_analytics"),
-            InlineKeyboardButton("🏦 Billing Portal", callback_data="billing_portal")
-        ],
-        [InlineKeyboardButton("🔄 Refresh Balance", callback_data="refresh_balance")]
-    ])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        balance_card,
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN
-    )
-    
-    # Check if should show low credit warning
-    if db.should_show_quick_buy_warning(user.id):
-        await send_quick_buy_warning(update, context)
-
-
-async def send_quick_buy_warning(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send quick buy warning for low credit users."""
-    user = update.effective_user
-    
-    # Mark warning as shown
-    db.mark_low_credit_warning_shown(user.id)
-    
-    # Get warning message from settings
-    warning_message = db.get_bot_setting('low_credit_warning_message') or \
-        "Running low on credits! 💡 Quick top-up options below:"
-    
-    user_data = db.get_user(user.id)
-    credits = user_data.get('message_credits', 0)
-    
-    warning_text = f"""
-💡 **{warning_message}**
-
-💰 Current balance: {credits} credits
-
-Quick purchase options:
-• 25 credits = $10 (Most Popular!)
-• 50 credits = $18 (Best Value!)
-• Unlimited daily access = $3
-
-Choose your preferred option:
-    """.strip()
-    
-    keyboard = [
-        [InlineKeyboardButton("🚀 25 Credits - $10", callback_data="quick_buy_25")],
-        [InlineKeyboardButton("💎 50 Credits - $18", callback_data="quick_buy_50")],
-        [InlineKeyboardButton("⏰ Daily Unlimited - $3", callback_data="daily_unlimited")],
-        [InlineKeyboardButton("🛒 View All Options", callback_data="show_products")]
-    ]
-    
-    await update.message.reply_text(
-        warning_text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-
-async def billing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Handle /billing command - redirect to Stripe Customer Portal.
-    """
-    user = update.effective_user
-    logger.info(f"Billing command from user {user.id}")
-    
-    # Import here to avoid circular imports
-    from src.stripe_utils import create_billing_portal_session
-    
     try:
-        # Get user's Stripe customer ID
-        user_data = db.get_user(user.id)
-        if not user_data or not user_data.get('stripe_customer_id'):
-            await update.message.reply_text(
-                "🏦 You need to make a purchase first before accessing billing settings.\n\n"
-                "Use /start to browse our products!"
-            )
+        # Get user data
+        user_data = db.get_user_dashboard_data(user.id)
+        if not user_data:
+            await update.message.reply_text("❌ User not found. Please use /start first.")
             return
         
-        # Create Stripe Customer Portal session
-        portal_url = create_billing_portal_session(user_data['stripe_customer_id'])
+        # Create balance card using bot_utils
+        balance_card = bot_utils.create_balance_card(user_data)
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("🔄 Refresh", callback_data="refresh_balance"),
+                InlineKeyboardButton("📊 Analytics", callback_data="show_analytics")
+            ],
+            [
+                InlineKeyboardButton("🛒 Buy Credits", callback_data="show_products"),
+                InlineKeyboardButton("💳 Billing Portal", callback_data="billing_portal")
+            ],
+            [
+                InlineKeyboardButton("💬 Start Chatting", callback_data="start_chatting"),
+                InlineKeyboardButton("🏠 Main Menu", callback_data="user_menu")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f"🏦 **Billing Management**\n\n"
-            f"Click the link below to manage your payment methods, "
-            f"view invoices, and update billing information:\n\n"
-            f"[Open Billing Portal]({portal_url})",
+            balance_card,
+            reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
         
     except Exception as e:
-        logger.error(f"Billing command failed for user {user.id}: {e}")
-        await update.message.reply_text(
-            "❌ Unable to access billing portal at the moment. Please try again later."
+        logger.error(f"Balance command failed for user {user.id}: {e}")
+        await update.message.reply_text("❌ Error loading balance. Please try again.")
+
+
+async def send_quick_buy_warning(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Send warning about low credits with quick buy options.
+    
+    Args:
+        context: PTB context object
+        user_id: User's Telegram ID
+        topic_id: Topic message thread ID
+    """
+    try:
+        # Get comprehensive user data
+        user_data = db.get_user_dashboard_data(user_id)
+        if not user_data:
+            logger.warning(f"No user data found for {user_id}")
+            return
+        
+        # Format info card
+        info_text = bot_utils.format_user_info_card(user_data)
+        
+        # Create admin action buttons using string callback data
+        keyboard = [
+            [
+                InlineKeyboardButton("🚫 Ban User", callback_data=f"admin_ban_{user_id}"),
+                InlineKeyboardButton("🎁 Gift Credits", callback_data=f"admin_gift_{user_id}"),
+            ],
+            [
+                InlineKeyboardButton("📊 Full History", callback_data=f"admin_history_{user_id}"),
+                InlineKeyboardButton("⬆️ Upgrade Tier", callback_data=f"admin_tier_{user_id}"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Send message to topic
+        message = await context.bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            message_thread_id=topic_id,
+            text=info_text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
         )
+        
+        # Pin the message
+        await context.bot.pin_chat_message(
+            chat_id=ADMIN_GROUP_ID,
+            message_id=message.message_id
+        )
+        
+        # Update database with pinned message ID
+        db.create_conversation_topic(user_id, ADMIN_GROUP_ID, topic_id, message.message_id)
+        
+        logger.info(f"✅ Sent and pinned user info card for {user_id} in topic {topic_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to send user info card: {e}")
 
 
 async def quick_buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1700,7 +1669,7 @@ async def user_balance_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # Create visual progress bar for credits
         max_display_credits = 100
         credits_percentage = min(credits / max_display_credits * 100, 100) if credits > 0 else 0
-        credits_bar = create_progress_bar(int(credits_percentage))
+        credits_bar = bot_utils.create_progress_bar(int(credits_percentage))
         
         # Determine status indicators
         if credits >= 50:
@@ -1936,7 +1905,7 @@ async def user_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Create progress bar for credits
         max_display_credits = 100
         credits_percentage = min(credits / max_display_credits * 100, 100) if credits > 0 else 0
-        credits_bar = create_progress_bar(int(credits_percentage))
+        credits_bar = bot_utils.create_progress_bar(int(credits_percentage))
         
         # Determine access status
         if time_expires:
@@ -2625,7 +2594,7 @@ async def show_balance_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text("❌ User data not found. Please try /start.")
             return
         
-        balance_card = create_balance_card(user_data)
+        balance_card = bot_utils.create_balance_card(user_data)
         credits = user_data.get('message_credits', 0)
         
         # Smart keyboard based on balance
@@ -3075,7 +3044,7 @@ async def enhanced_start_command(update: Update, context: ContextTypes.DEFAULT_T
         # Create visual progress bar
         max_display_credits = int(db.get_bot_setting('progress_bar_max_credits') or '100')
         credits_percentage = min(credits / max_display_credits * 100, 100) if credits > 0 else 0
-        credits_bar = create_progress_bar(int(credits_percentage))
+        credits_bar = bot_utils.create_progress_bar(int(credits_percentage))
         
         # Determine access status with enhanced visuals
         if time_expires:
