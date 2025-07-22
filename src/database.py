@@ -5,8 +5,9 @@ This module handles all database connections and operations using ThreadedConnec
 for thread-safe operations in a Gunicorn multi-worker environment.
 """
 
-import logging
 import contextlib
+import logging
+import uuid
 from typing import Optional, Dict, List, Any, Union
 import psycopg2
 import psycopg2.pool
@@ -23,6 +24,7 @@ connection_pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 
 class DatabaseError(Exception):
     """Raised when database operations fail."""
+
     pass
 
 
@@ -51,9 +53,11 @@ def init_connection_pool(min_conn: int = None, max_conn: int = None) -> None:
             min_conn,
             max_conn,
             DATABASE_URL,
-            cursor_factory=RealDictCursor  # Return dict-like results
+            cursor_factory=RealDictCursor,  # Return dict-like results
         )
-        logger.info(f"ThreadedConnectionPool created with {min_conn}-{max_conn} connections")
+        logger.info(
+            f"ThreadedConnectionPool created with {min_conn}-{max_conn} connections"
+        )
     except Exception as e:
         logger.error(f"Error creating connection pool: {e}")
         raise DatabaseError(f"Failed to initialize connection pool: {e}")
@@ -98,7 +102,7 @@ def execute_query(
     query: str,
     params: Optional[tuple] = None,
     fetch_one: bool = False,
-    fetch_all: bool = False
+    fetch_all: bool = False,
 ) -> Optional[Union[Dict[str, Any], List[Dict[str, Any]], int]]:
     """
     Master function for all database operations.
@@ -129,7 +133,13 @@ def execute_query(
 # USER MANAGEMENT FUNCTIONS
 # =============================================================================
 
-def get_or_create_user(telegram_id: int, username: Optional[str], first_name: str, last_name: Optional[str] = None) -> Dict[str, Any]:
+
+def get_or_create_user(
+    telegram_id: int,
+    username: Optional[str],
+    first_name: str,
+    last_name: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Get existing user or create new one (upsert operation).
     Uses INSERT ... ON CONFLICT for atomic operation.
@@ -154,7 +164,9 @@ def get_or_create_user(telegram_id: int, username: Optional[str], first_name: st
             updated_at = NOW()
         RETURNING *;
     """
-    return execute_query(query, (telegram_id, username, first_name, last_name), fetch_one=True)
+    return execute_query(
+        query, (telegram_id, username, first_name, last_name), fetch_one=True
+    )
 
 
 def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
@@ -163,7 +175,9 @@ def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
     return execute_query(query, (telegram_id,), fetch_one=True)
 
 
-def update_user_credits(telegram_id: int, credit_amount: int) -> Optional[Dict[str, Any]]:
+def update_user_credits(
+    telegram_id: int, credit_amount: int
+) -> Optional[Dict[str, Any]]:
     """
     Add credits to user account.
 
@@ -206,11 +220,11 @@ def update_user_tier(telegram_id: int, tier_id: int) -> None:
 def update_user_time_access(user_id: int, expires_at: Any) -> bool:
     """
     Update user's time-based access expiration.
-    
+
     Args:
         user_id: User's Telegram ID
         expires_at: DateTime when time access expires
-        
+
     Returns:
         True if successful
     """
@@ -221,7 +235,7 @@ def update_user_time_access(user_id: int, expires_at: Any) -> bool:
             updated_at = NOW()
         WHERE telegram_id = %s
     """
-    
+
     try:
         execute_query(query, (expires_at, user_id))
         logger.info(f"✅ Updated time access for user {user_id} until {expires_at}")
@@ -235,7 +249,13 @@ def update_user_time_access(user_id: int, expires_at: Any) -> bool:
 # CONVERSATION MANAGEMENT FUNCTIONS
 # =============================================================================
 
-def create_conversation_topic(user_id: int, admin_group_id: int, topic_id: int, pinned_message_id: Optional[int] = None) -> None:
+
+def create_conversation_topic(
+    user_id: int,
+    admin_group_id: int,
+    topic_id: int,
+    pinned_message_id: Optional[int] = None,
+) -> None:
     """Create new conversation topic for user."""
     query = """
         INSERT INTO conversations (user_id, admin_group_id, topic_id, pinned_message_id, last_user_message_at, created_at)
@@ -267,7 +287,7 @@ def get_user_id_from_topic(topic_id: int, admin_group_id: int) -> Optional[int]:
         WHERE topic_id = %s AND admin_group_id = %s AND status = 'open'
     """
     result = execute_query(query, (topic_id, admin_group_id), fetch_one=True)
-    return result['user_id'] if result else None
+    return result["user_id"] if result else None
 
 
 def get_topic_id_from_user(user_id: int, admin_group_id: int) -> Optional[int]:
@@ -277,7 +297,7 @@ def get_topic_id_from_user(user_id: int, admin_group_id: int) -> Optional[int]:
         WHERE user_id = %s AND admin_group_id = %s AND status = 'open'
     """
     result = execute_query(query, (user_id, admin_group_id), fetch_one=True)
-    return result['topic_id'] if result else None
+    return result["topic_id"] if result else None
 
 
 def update_last_message_time(user_id: int, admin_group_id: int) -> None:
@@ -294,6 +314,7 @@ def update_last_message_time(user_id: int, admin_group_id: int) -> None:
 # TRANSACTION MANAGEMENT
 # =============================================================================
 
+
 def log_transaction(
     user_id: int,
     product_id: Optional[int],
@@ -303,8 +324,8 @@ def log_transaction(
     amount_cents: int,
     credits_granted: int = 0,
     time_granted_seconds: int = 0,
-    status: str = 'pending',
-    description: Optional[str] = None
+    status: str = "pending",
+    description: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Log transaction for business intelligence."""
     query = """
@@ -316,13 +337,25 @@ def log_transaction(
     """
     return execute_query(
         query,
-        (user_id, product_id, stripe_charge_id, stripe_session_id, idempotency_key,
-         amount_cents, credits_granted, time_granted_seconds, status, description),
-        fetch_one=True
+        (
+            user_id,
+            product_id,
+            stripe_charge_id,
+            stripe_session_id,
+            idempotency_key,
+            amount_cents,
+            credits_granted,
+            time_granted_seconds,
+            status,
+            description,
+        ),
+        fetch_one=True,
     )
 
 
-def update_transaction_status(transaction_id: str, status: str, stripe_charge_id: Optional[str] = None) -> None:
+def update_transaction_status(
+    transaction_id: str, status: str, stripe_charge_id: Optional[str] = None
+) -> None:
     """Update transaction status."""
     if stripe_charge_id:
         query = """
@@ -343,11 +376,11 @@ def update_transaction_status(transaction_id: str, status: str, stripe_charge_id
 def get_user_transactions(user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
     """
     Get user's transaction history.
-    
+
     Args:
         user_id: User's Telegram ID
         limit: Maximum number of transactions to return
-        
+
     Returns:
         List of transaction dictionaries
     """
@@ -370,7 +403,7 @@ def get_user_transactions(user_id: int, limit: int = 10) -> List[Dict[str, Any]]
         ORDER BY created_at DESC
         LIMIT %s
     """
-    
+
     result = execute_query(query, (user_id, limit), fetch_all=True)
     return result if result else []
 
@@ -378,10 +411,10 @@ def get_user_transactions(user_id: int, limit: int = 10) -> List[Dict[str, Any]]
 def get_user_payment_stats(user_id: int) -> Dict[str, Any]:
     """
     Get comprehensive payment statistics for a user.
-    
+
     Args:
         user_id: User's Telegram ID
-        
+
     Returns:
         Dictionary with payment statistics
     """
@@ -398,29 +431,35 @@ def get_user_payment_stats(user_id: int) -> Dict[str, Any]:
         FROM transactions 
         WHERE user_id = %s
     """
-    
+
     result = execute_query(query, (user_id,), fetch_one=True)
-    return result if result else {
-        'total_transactions': 0,
-        'successful_transactions': 0,
-        'failed_transactions': 0,
-        'pending_transactions': 0,
-        'total_spent_cents': 0,
-        'total_credits_purchased': 0,
-        'first_purchase_date': None,
-        'last_purchase_date': None
-    }
+    return (
+        result
+        if result
+        else {
+            "total_transactions": 0,
+            "successful_transactions": 0,
+            "failed_transactions": 0,
+            "pending_transactions": 0,
+            "total_spent_cents": 0,
+            "total_credits_purchased": 0,
+            "first_purchase_date": None,
+            "last_purchase_date": None,
+        }
+    )
 
 
-def enable_auto_recharge(user_id: int, product_id: int, trigger_threshold: int = 5) -> bool:
+def enable_auto_recharge(
+    user_id: int, product_id: int, trigger_threshold: int = 5
+) -> bool:
     """
     Enable auto-recharge for a user.
-    
+
     Args:
         user_id: User's Telegram ID
         product_id: Product ID to auto-purchase
         trigger_threshold: Credit level that triggers auto-recharge
-        
+
     Returns:
         True if successful
     """
@@ -433,10 +472,12 @@ def enable_auto_recharge(user_id: int, product_id: int, trigger_threshold: int =
             updated_at = NOW()
         WHERE telegram_id = %s
     """
-    
+
     try:
         execute_query(query, (product_id, trigger_threshold, user_id))
-        logger.info(f"✅ Enabled auto-recharge for user {user_id}, product {product_id}, threshold {trigger_threshold}")
+        logger.info(
+            f"✅ Enabled auto-recharge for user {user_id}, product {product_id}, threshold {trigger_threshold}"
+        )
         return True
     except Exception as e:
         logger.error(f"Failed to enable auto-recharge for user {user_id}: {e}")
@@ -446,10 +487,10 @@ def enable_auto_recharge(user_id: int, product_id: int, trigger_threshold: int =
 def disable_auto_recharge(user_id: int) -> bool:
     """
     Disable auto-recharge for a user.
-    
+
     Args:
         user_id: User's Telegram ID
-        
+
     Returns:
         True if successful
     """
@@ -462,7 +503,7 @@ def disable_auto_recharge(user_id: int) -> bool:
             updated_at = NOW()
         WHERE telegram_id = %s
     """
-    
+
     try:
         execute_query(query, (user_id,))
         logger.info(f"✅ Disabled auto-recharge for user {user_id}")
@@ -475,7 +516,7 @@ def disable_auto_recharge(user_id: int) -> bool:
 def get_users_needing_auto_recharge() -> List[Dict[str, Any]]:
     """
     Get users who need auto-recharge triggered.
-    
+
     Returns:
         List of users with auto-recharge enabled and low credits
     """
@@ -497,7 +538,7 @@ def get_users_needing_auto_recharge() -> List[Dict[str, Any]]:
             AND u.stripe_customer_id IS NOT NULL
             AND p.is_active = TRUE
     """
-    
+
     result = execute_query(query, fetch_all=True)
     return result if result else []
 
@@ -505,11 +546,11 @@ def get_users_needing_auto_recharge() -> List[Dict[str, Any]]:
 def check_failed_payments(user_id: int, days: int = 7) -> int:
     """
     Check how many payments have failed for a user in recent days.
-    
+
     Args:
         user_id: User's Telegram ID
         days: Number of days to check back
-        
+
     Returns:
         Number of failed payments
     """
@@ -520,14 +561,15 @@ def check_failed_payments(user_id: int, days: int = 7) -> int:
         AND status = 'failed'
         AND created_at >= NOW() - INTERVAL '%s days'
     """
-    
+
     result = execute_query(query, (user_id, days), fetch_one=True)
-    return result.get('failed_count', 0) if result else 0
+    return result.get("failed_count", 0) if result else 0
 
 
 # =============================================================================
 # PRODUCT MANAGEMENT
 # =============================================================================
+
 
 def get_active_products() -> List[Dict[str, Any]]:
     """Get all active products."""
@@ -555,15 +597,35 @@ def get_product_by_stripe_price_id(stripe_price_id: str) -> Optional[Dict[str, A
     return execute_query(query, (stripe_price_id,), fetch_one=True)
 
 
+def get_product_by_credit_amount(credit_amount: int) -> Optional[Dict[str, Any]]:
+    """
+    Get a product by the number of credits it grants.
+
+    Args:
+        credit_amount: The number of credits.
+
+    Returns:
+        A dictionary representing the product, or None if not found.
+    """
+    query = """
+        SELECT * FROM products
+        WHERE credits_granted = %s AND product_type = 'credits'
+        ORDER BY price_usd ASC
+        LIMIT 1
+    """
+    return execute_query(query, (credit_amount,), fetch_one=True)
+
+
 # =============================================================================
 # BOT SETTINGS MANAGEMENT
 # =============================================================================
+
 
 def get_bot_setting(key: str) -> Optional[str]:
     """Get bot setting value."""
     query = "SELECT value FROM bot_settings WHERE key = %s"
     result = execute_query(query, (key,), fetch_one=True)
-    return result['value'] if result else None
+    return result["value"] if result else None
 
 
 def set_bot_setting(key: str, value: str, updated_by: Optional[int] = None) -> None:
@@ -583,6 +645,7 @@ def set_bot_setting(key: str, value: str, updated_by: Optional[int] = None) -> N
 # =============================================================================
 # ANALYTICS & BUSINESS INTELLIGENCE
 # =============================================================================
+
 
 def get_user_dashboard_data(user_id: int) -> Optional[Dict[str, Any]]:
     """Get comprehensive user data for admin dashboard."""
@@ -607,22 +670,58 @@ def get_revenue_analytics(days: int = 30) -> List[Dict[str, Any]]:
     return execute_query(query, (days,), fetch_all=True)
 
 
+def get_revenue_analytics() -> Dict[str, Any]:
+    """Get detailed revenue analytics."""
+    query = """
+    SELECT
+        (SELECT COALESCE(SUM(amount_paid_usd_cents), 0) FROM transactions WHERE status = 'completed') / 100.0 AS total_revenue,
+        (SELECT COALESCE(SUM(amount_paid_usd_cents), 0) FROM transactions WHERE status = 'completed' AND created_at >= date_trunc('month', NOW())) / 100.0 AS current_month,
+        (SELECT COALESCE(SUM(amount_paid_usd_cents), 0) FROM transactions WHERE status = 'completed' AND created_at >= date_trunc('month', NOW() - interval '1 month') AND created_at < date_trunc('month', NOW())) / 100.0 AS last_month,
+        (SELECT COUNT(*) FROM transactions) AS total_transactions,
+        (SELECT COUNT(*) FROM transactions WHERE status = 'completed') AS successful_payments,
+        (SELECT COUNT(*) FROM transactions WHERE status = 'failed') AS failed_payments,
+        (SELECT name FROM products ORDER BY (SELECT COUNT(*) FROM transactions WHERE product_id = products.id) DESC LIMIT 1) AS top_product,
+        (SELECT COALESCE(AVG(amount_paid_usd_cents), 0) FROM transactions WHERE status = 'completed') / 100.0 AS avg_order_value,
+        (SELECT COALESCE(SUM(credits_granted), 0) FROM transactions WHERE status = 'completed') AS total_credits_sold
+    """
+    return execute_query(query, fetch_one=True)
+
+def get_user_analytics() -> Dict[str, Any]:
+    """Get detailed user analytics."""
+    query = """
+    SELECT
+        (SELECT COUNT(*) FROM users) AS total_users,
+        (SELECT COUNT(*) FROM users WHERE created_at >= NOW() - interval '1 day') AS new_today,
+        (SELECT COUNT(*) FROM users WHERE created_at >= NOW() - interval '7 day') AS new_week,
+        (SELECT COUNT(*) FROM users WHERE created_at >= NOW() - interval '30 day') AS new_month,
+        (SELECT COUNT(*) FROM users WHERE last_message_at >= NOW() - interval '1 day') AS active_24h,
+        (SELECT COUNT(*) FROM users WHERE last_message_at >= NOW() - interval '7 day') AS active_7d,
+        (SELECT COUNT(*) FROM users WHERE last_message_at >= NOW() - interval '30 day') AS active_30d,
+        (SELECT COALESCE(AVG(total_messages_sent), 0) FROM users) AS avg_messages,
+        (SELECT COALESCE(AVG(message_credits), 0) FROM users) AS avg_credits,
+        (SELECT COUNT(*) FROM users WHERE total_messages_sent > 100) AS power_users,
+        (SELECT COUNT(*) FROM users WHERE is_banned = TRUE) AS banned_users
+    """
+    return execute_query(query, fetch_one=True)
+
+
 # =============================================================================
 # ANALYTICS FUNCTIONS
 # =============================================================================
+
 
 def get_user_count() -> int:
     """Get total number of users."""
     query = "SELECT COUNT(*) as count FROM users"
     result = execute_query(query, fetch_one=True)
-    return result['count'] if result else 0
+    return result["count"] if result else 0
 
 
 def get_conversation_count() -> int:
     """Get total number of active conversations."""
     query = "SELECT COUNT(*) as count FROM conversations WHERE status = 'open'"
     result = execute_query(query, fetch_one=True)
-    return result['count'] if result else 0
+    return result["count"] if result else 0
 
 
 def get_all_products() -> List[Dict[str, Any]]:
@@ -640,6 +739,7 @@ def get_all_products() -> List[Dict[str, Any]]:
 # DATABASE MIGRATIONS
 # =============================================================================
 
+
 def apply_conversation_table_fix() -> None:
     """
     Apply critical fix for conversations table constraint issue.
@@ -647,21 +747,21 @@ def apply_conversation_table_fix() -> None:
     """
     try:
         logger.info("🔧 Applying conversations table constraint fix...")
-        
+
         # Step 1: Drop any existing problematic constraints
         drop_constraints_queries = [
             "ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_user_id_admin_group_id_status_key",
             "ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_user_id_admin_group_id_key",
-            "DROP INDEX IF EXISTS idx_conversations_user_group_open"
+            "DROP INDEX IF EXISTS idx_conversations_user_group_open",
         ]
-        
+
         for query in drop_constraints_queries:
             try:
                 execute_query(query)
                 logger.info(f"Executed: {query}")
             except Exception as e:
                 logger.warning(f"Could not execute {query}: {e}")
-        
+
         # Step 2: Add the simple constraint we need
         add_constraint_query = """
             ALTER TABLE conversations 
@@ -676,7 +776,7 @@ def apply_conversation_table_fix() -> None:
                 logger.info("✅ Conversations constraint already exists")
             else:
                 logger.error(f"Failed to add constraint: {e}")
-                
+
         # Step 3: Clean up any duplicate conversations (keep the latest)
         cleanup_query = """
             DELETE FROM conversations 
@@ -691,9 +791,9 @@ def apply_conversation_table_fix() -> None:
             logger.info("✅ Cleaned up duplicate conversations")
         except Exception as e:
             logger.warning(f"Could not clean up duplicates: {e}")
-                
+
         logger.info("✅ Conversations table constraint fix completed")
-                
+
     except Exception as e:
         logger.error(f"Failed to apply conversations table fix: {e}")
         # Don't raise - this is a migration, let the app continue
@@ -706,7 +806,7 @@ def fix_products_table_schema() -> None:
     """
     try:
         logger.info("🔧 Checking and fixing products table schema...")
-        
+
         # Check what columns exist in products table
         check_columns_query = """
             SELECT column_name 
@@ -715,32 +815,36 @@ def fix_products_table_schema() -> None:
             ORDER BY ordinal_position
         """
         existing_columns = execute_query(check_columns_query, fetch_all=True)
-        column_names = [col['column_name'] for col in existing_columns] if existing_columns else []
-        
+        column_names = (
+            [col["column_name"] for col in existing_columns] if existing_columns else []
+        )
+
         logger.info(f"Existing products columns: {column_names}")
-        
+
         # Define required columns and their definitions
         required_columns = {
-            'stripe_price_id': 'VARCHAR(255) NOT NULL',
-            'product_type': 'VARCHAR(50) NOT NULL DEFAULT \'credits\'',
-            'name': 'VARCHAR(100) NOT NULL DEFAULT \'Unknown Product\'',
-            'description': 'TEXT',
-            'amount': 'INT NOT NULL DEFAULT 1',
-            'price_usd_cents': 'INT NOT NULL DEFAULT 100',
-            'sort_order': 'INT DEFAULT 0',
-            'is_active': 'BOOLEAN DEFAULT TRUE'
+            "stripe_price_id": "VARCHAR(255) NOT NULL",
+            "product_type": "VARCHAR(50) NOT NULL DEFAULT 'credits'",
+            "name": "VARCHAR(100) NOT NULL DEFAULT 'Unknown Product'",
+            "description": "TEXT",
+            "amount": "INT NOT NULL DEFAULT 1",
+            "price_usd_cents": "INT NOT NULL DEFAULT 100",
+            "sort_order": "INT DEFAULT 0",
+            "is_active": "BOOLEAN DEFAULT TRUE",
         }
-        
+
         # Add missing columns
         for column_name, column_def in required_columns.items():
             if column_name not in column_names:
                 try:
-                    alter_query = f"ALTER TABLE products ADD COLUMN {column_name} {column_def}"
+                    alter_query = (
+                        f"ALTER TABLE products ADD COLUMN {column_name} {column_def}"
+                    )
                     execute_query(alter_query)
                     logger.info(f"✅ Added column: {column_name}")
                 except Exception as e:
                     logger.error(f"Failed to add column {column_name}: {e}")
-        
+
         # Ensure we have a unique constraint on stripe_price_id
         try:
             unique_constraint_query = """
@@ -755,9 +859,9 @@ def fix_products_table_schema() -> None:
                 logger.info("✅ stripe_price_id constraint already exists")
             else:
                 logger.warning(f"Could not add stripe_price_id constraint: {e}")
-        
+
         logger.info("✅ Products table schema check completed")
-        
+
     except Exception as e:
         logger.error(f"Failed to fix products table schema: {e}")
 
@@ -770,40 +874,77 @@ def ensure_sample_products() -> None:
     try:
         # First fix the schema
         fix_products_table_schema()
-        
+
         # Check if products already exist
         existing_products = get_active_products()
         if existing_products:
-            logger.info(f"Found {len(existing_products)} existing products, skipping sample creation")
+            logger.info(
+                f"Found {len(existing_products)} existing products, skipping sample creation"
+            )
             return
-        
+
         logger.info("No products found, creating sample products...")
-        
+
         sample_products = [
-            ('credits', '10 Credits Pack', 'Perfect for light usage - 10 message credits', 
-             'price_10credits_test', 10, 500, 1),
-            ('credits', '25 Credits Pack', 'Great value - 25 message credits',
-             'price_25credits_test', 25, 1000, 2),
-            ('credits', '50 Credits Pack', 'Best value - 50 message credits',
-             'price_50credits_test', 50, 1800, 3),
-            ('time', '7 Days Access', 'Unlimited messages for 7 days',
-             'price_7days_test', 7, 1500, 4),
-            ('time', '30 Days Access', 'Unlimited messages for 30 days',
-             'price_30days_test', 30, 5000, 5)
+            (
+                "credits",
+                "10 Credits Pack",
+                "Perfect for light usage - 10 message credits",
+                "price_10credits_test",
+                10,
+                500,
+                1,
+            ),
+            (
+                "credits",
+                "25 Credits Pack",
+                "Great value - 25 message credits",
+                "price_25credits_test",
+                25,
+                1000,
+                2,
+            ),
+            (
+                "credits",
+                "50 Credits Pack",
+                "Best value - 50 message credits",
+                "price_50credits_test",
+                50,
+                1800,
+                3,
+            ),
+            (
+                "time",
+                "7 Days Access",
+                "Unlimited messages for 7 days",
+                "price_7days_test",
+                7,
+                1500,
+                4,
+            ),
+            (
+                "time",
+                "30 Days Access",
+                "Unlimited messages for 30 days",
+                "price_30days_test",
+                30,
+                5000,
+                5,
+            ),
         ]
-        
+
         query = """
             INSERT INTO products (product_type, name, description, stripe_price_id, 
                                 amount, price_usd_cents, sort_order, is_active)
             VALUES (%s, %s, %s, %s, %s, %s, %s, true)
             ON CONFLICT (stripe_price_id) DO NOTHING
         """
-        
+
         for product_data in sample_products:
             execute_query(query, product_data)
-        
+
         logger.info(f"✅ Created {len(sample_products)} sample products")
-        
+
     except Exception as e:
         logger.error(f"Failed to create sample products: {e}")
 
@@ -815,7 +956,7 @@ def apply_database_views_and_functions() -> None:
     """
     try:
         logger.info("🔧 Applying database views and functions...")
-        
+
         # Create user_dashboard_view
         user_dashboard_view_sql = """
         CREATE OR REPLACE VIEW user_dashboard_view AS
@@ -847,10 +988,10 @@ def apply_database_views_and_functions() -> None:
             u.time_credits_expires_at, t.name, t.permissions, u.created_at,
             u.auto_recharge_enabled, c.topic_id, c.last_user_message_at, c.status;
         """
-        
+
         execute_query(user_dashboard_view_sql)
         logger.info("✅ Created/updated user_dashboard_view")
-        
+
         # Create revenue_analytics view
         revenue_analytics_view_sql = """
         CREATE OR REPLACE VIEW revenue_analytics AS
@@ -870,10 +1011,10 @@ def apply_database_views_and_functions() -> None:
         ORDER BY
             date DESC;
         """
-        
+
         execute_query(revenue_analytics_view_sql)
         logger.info("✅ Created/updated revenue_analytics view")
-        
+
         # Create bot settings functions
         get_bot_setting_function_sql = """
         CREATE OR REPLACE FUNCTION get_bot_setting(setting_key VARCHAR)
@@ -889,10 +1030,10 @@ def apply_database_views_and_functions() -> None:
         END;
         $$ LANGUAGE plpgsql;
         """
-        
+
         execute_query(get_bot_setting_function_sql)
         logger.info("✅ Created/updated get_bot_setting function")
-        
+
         set_bot_setting_function_sql = """
         CREATE OR REPLACE FUNCTION set_bot_setting(setting_key VARCHAR, setting_value TEXT, updated_by_user BIGINT DEFAULT NULL)
         RETURNS VOID AS $$
@@ -907,12 +1048,12 @@ def apply_database_views_and_functions() -> None:
         END;
         $$ LANGUAGE plpgsql;
         """
-        
+
         execute_query(set_bot_setting_function_sql)
         logger.info("✅ Created/updated set_bot_setting function")
-        
+
         logger.info("✅ Database views and functions applied successfully")
-        
+
     except Exception as e:
         logger.error(f"Failed to apply database views and functions: {e}")
         # Don't raise - this is a migration, let the app continue
@@ -924,127 +1065,201 @@ def apply_enhanced_ux_migration() -> None:
     Adds new columns and bot settings for tutorial, progress bars, and quick buy.
     """
     logger.info("🔧 Applying enhanced UX migration...")
-    
+
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
-                
+
                 # STEP 1: Fix bot_settings table schema if needed
                 try:
                     # Check if value_type column exists
-                    cursor.execute("""
+                    cursor.execute(
+                        """
                         SELECT column_name 
                         FROM information_schema.columns 
                         WHERE table_name = 'bot_settings' AND column_name = 'value_type'
-                    """)
+                    """
+                    )
                     has_value_type = cursor.fetchone() is not None
-                    
+
                     if not has_value_type:
-                        logger.info("Adding missing value_type column to bot_settings table...")
-                        cursor.execute("""
+                        logger.info(
+                            "Adding missing value_type column to bot_settings table..."
+                        )
+                        cursor.execute(
+                            """
                             ALTER TABLE bot_settings 
                             ADD COLUMN value_type VARCHAR(50) DEFAULT 'string'
-                        """)
+                        """
+                        )
                         logger.info("✅ Added value_type column to bot_settings")
-                    
+
                     # Ensure updated_by column exists
-                    cursor.execute("""
+                    cursor.execute(
+                        """
                         SELECT column_name 
                         FROM information_schema.columns 
                         WHERE table_name = 'bot_settings' AND column_name = 'updated_by'
-                    """)
+                    """
+                    )
                     has_updated_by = cursor.fetchone() is not None
-                    
+
                     if not has_updated_by:
-                        cursor.execute("""
+                        cursor.execute(
+                            """
                             ALTER TABLE bot_settings 
                             ADD COLUMN updated_by BIGINT
-                        """)
+                        """
+                        )
                         logger.info("✅ Added updated_by column to bot_settings")
-                    
+
                 except Exception as e:
                     logger.error(f"Error fixing bot_settings schema: {e}")
-                
+
                 # STEP 2: Add new columns to users table (if they don't exist)
                 new_columns = [
                     ("tutorial_completed", "BOOLEAN DEFAULT FALSE"),
                     ("tutorial_step", "INTEGER DEFAULT 0"),
                     ("is_new_user", "BOOLEAN DEFAULT TRUE"),
                     ("total_messages_sent", "INTEGER DEFAULT 0"),
-                    ("last_low_credit_warning_at", "TIMESTAMPTZ")
+                    ("last_low_credit_warning_at", "TIMESTAMPTZ"),
                 ]
-                
+
                 for column_name, column_def in new_columns:
                     try:
                         # Check if column exists first
-                        cursor.execute("""
+                        cursor.execute(
+                            """
                             SELECT column_name 
                             FROM information_schema.columns 
                             WHERE table_name = 'users' AND column_name = %s
-                        """, (column_name,))
-                        
+                        """,
+                            (column_name,),
+                        )
+
                         if not cursor.fetchone():
-                            cursor.execute(f"""
+                            cursor.execute(
+                                f"""
                                 ALTER TABLE users 
                                 ADD COLUMN {column_name} {column_def}
-                            """)
+                            """
+                            )
                             logger.info(f"✅ Added column: users.{column_name}")
                         else:
                             logger.info(f"✅ Column users.{column_name} already exists")
                     except Exception as e:
                         logger.warning(f"Error adding column {column_name}: {e}")
-                
+
                 # STEP 3: Add new bot settings (if they don't exist)
                 new_settings = [
                     # Enhanced Welcome System
-                    ('new_user_free_credits', '3', 'Free credits given to new users', 'integer'),
-                    ('welcome_message_new', 'Welcome, {first_name}! 🎉\n\nYou\'ve received {free_credits} FREE credits to get started! 🎁\n\n✨ What can I help you with today?', 'Welcome message for new users', 'string'),
-                    ('welcome_message_returning', 'Welcome back, {first_name}! 👋\n\n💰 Your balance: {credits} credits', 'Welcome message for returning users', 'string'),
-                    
+                    (
+                        "new_user_free_credits",
+                        "3",
+                        "Free credits given to new users",
+                        "integer",
+                    ),
+                    (
+                        "welcome_message_new",
+                        "Welcome, {first_name}! 🎉\n\nYou've received {free_credits} FREE credits to get started! 🎁\n\n✨ What can I help you with today?",
+                        "Welcome message for new users",
+                        "string",
+                    ),
+                    (
+                        "welcome_message_returning",
+                        "Welcome back, {first_name}! 👋\n\n💰 Your balance: {credits} credits",
+                        "Welcome message for returning users",
+                        "string",
+                    ),
                     # Tutorial System
-                    ('tutorial_enabled', 'true', 'Enable interactive tutorial for new users', 'boolean'),
-                    ('tutorial_completion_bonus', '2', 'Bonus credits for completing tutorial', 'integer'),
-                    
+                    (
+                        "tutorial_enabled",
+                        "true",
+                        "Enable interactive tutorial for new users",
+                        "boolean",
+                    ),
+                    (
+                        "tutorial_completion_bonus",
+                        "2",
+                        "Bonus credits for completing tutorial",
+                        "integer",
+                    ),
                     # Progress Bar Settings
-                    ('progress_bar_max_credits', '100', 'Maximum credits for 100% progress bar display', 'integer'),
-                    ('balance_low_threshold', '5', 'Credits threshold for low balance warning', 'integer'),
-                    ('balance_critical_threshold', '2', 'Credits threshold for critical balance warning', 'integer'),
-                    
+                    (
+                        "progress_bar_max_credits",
+                        "100",
+                        "Maximum credits for 100% progress bar display",
+                        "integer",
+                    ),
+                    (
+                        "balance_low_threshold",
+                        "5",
+                        "Credits threshold for low balance warning",
+                        "integer",
+                    ),
+                    (
+                        "balance_critical_threshold",
+                        "2",
+                        "Credits threshold for critical balance warning",
+                        "integer",
+                    ),
                     # Quick Buy Settings
-                    ('quick_buy_enabled', 'true', 'Enable quick buy buttons for low credit situations', 'boolean'),
-                    ('quick_buy_trigger_threshold', '5', 'Show quick buy options when credits below this', 'integer'),
-                    ('low_credit_warning_message', 'Running low on credits! 💡 Quick top-up options below:', 'Message shown with quick buy buttons', 'string')
+                    (
+                        "quick_buy_enabled",
+                        "true",
+                        "Enable quick buy buttons for low credit situations",
+                        "boolean",
+                    ),
+                    (
+                        "quick_buy_trigger_threshold",
+                        "5",
+                        "Show quick buy options when credits below this",
+                        "integer",
+                    ),
+                    (
+                        "low_credit_warning_message",
+                        "Running low on credits! 💡 Quick top-up options below:",
+                        "Message shown with quick buy buttons",
+                        "string",
+                    ),
                 ]
-                
+
                 # Insert settings with proper error handling
                 settings_added = 0
                 for key, value, description, value_type in new_settings:
                     try:
-                        cursor.execute("""
+                        cursor.execute(
+                            """
                             INSERT INTO bot_settings (key, value, description, value_type)
                             VALUES (%s, %s, %s, %s)
                             ON CONFLICT (key) DO NOTHING
-                        """, (key, value, description, value_type))
+                        """,
+                            (key, value, description, value_type),
+                        )
                         if cursor.rowcount > 0:
                             settings_added += 1
-                    except Exception as e:
+                    except Exception:
                         # Try without value_type if it still doesn't exist
                         try:
-                            cursor.execute("""
+                            cursor.execute(
+                                """
                                 INSERT INTO bot_settings (key, value, description)
                                 VALUES (%s, %s, %s)
                                 ON CONFLICT (key) DO NOTHING
-                            """, (key, value, description))
+                            """,
+                                (key, value, description),
+                            )
                             if cursor.rowcount > 0:
                                 settings_added += 1
                         except Exception as e2:
                             logger.warning(f"Could not add setting {key}: {e2}")
-                
+
                 logger.info(f"✅ Added {settings_added} bot settings")
-                
+
                 # STEP 4: Update existing users to have proper defaults (with error handling)
                 try:
-                    cursor.execute("""
+                    cursor.execute(
+                        """
                         UPDATE users 
                         SET 
                             tutorial_completed = COALESCE(tutorial_completed, FALSE),
@@ -1059,19 +1274,22 @@ def apply_enhanced_ux_migration() -> None:
                            OR tutorial_step IS NULL 
                            OR is_new_user IS NULL
                            OR total_messages_sent IS NULL
-                    """)
-                    
+                    """
+                    )
+
                     updated_users = cursor.rowcount
                     if updated_users > 0:
-                        logger.info(f"✅ Updated {updated_users} existing users with new defaults")
-                    
+                        logger.info(
+                            f"✅ Updated {updated_users} existing users with new defaults"
+                        )
+
                 except Exception as e:
                     logger.warning(f"Could not update existing users: {e}")
-                
+
                 # STEP 5: Commit all changes
                 conn.commit()
                 logger.info("✅ Enhanced UX migration completed successfully")
-                
+
     except Exception as e:
         logger.error(f"❌ Enhanced UX migration failed: {e}")
         # Don't raise - let the app continue with whatever state it's in
@@ -1081,13 +1299,14 @@ def apply_enhanced_ux_migration() -> None:
 # ENHANCED USER EXPERIENCE FUNCTIONS
 # =============================================================================
 
+
 def is_new_user(telegram_id: int) -> bool:
     """
     Check if user is a new user (hasn't received welcome credits yet).
-    
+
     Args:
         telegram_id: User's Telegram ID
-        
+
     Returns:
         True if user is new, False otherwise
     """
@@ -1109,24 +1328,26 @@ def is_new_user(telegram_id: int) -> bool:
         if not result:
             return True
         # Consider user new if they have no credits and haven't made purchases
-        return result.get('message_credits', 0) == 0 and not has_user_made_purchases(telegram_id)
-    
+        return result.get("message_credits", 0) == 0 and not has_user_made_purchases(
+            telegram_id
+        )
+
     if not result:
         return True  # User doesn't exist, definitely new
-    
-    # User is new if flagged as new and has no message history 
+
+    # User is new if flagged as new and has no message history
     # and no purchased credits
     return (
-        result.get('is_new_user', True) and 
-        result.get('total_messages_sent', 0) == 0 and
-        not has_user_made_purchases(telegram_id)
+        result.get("is_new_user", True)
+        and result.get("total_messages_sent", 0) == 0
+        and not has_user_made_purchases(telegram_id)
     )
 
 
 def mark_user_as_not_new(telegram_id: int) -> None:
     """
     Mark user as no longer new (after welcome credits given).
-    
+
     Args:
         telegram_id: User's Telegram ID
     """
@@ -1145,10 +1366,10 @@ def mark_user_as_not_new(telegram_id: int) -> None:
 def get_user_tutorial_state(telegram_id: int) -> Dict[str, Any]:
     """
     Get user's tutorial progress.
-    
+
     Args:
         telegram_id: User's Telegram ID
-        
+
     Returns:
         Dictionary with tutorial_completed, tutorial_step
     """
@@ -1161,21 +1382,23 @@ def get_user_tutorial_state(telegram_id: int) -> Dict[str, Any]:
         result = execute_query(query, (telegram_id,), fetch_one=True)
     except Exception:
         # Fallback if columns don't exist yet
-        return {'tutorial_completed': False, 'tutorial_step': 0}
-    
+        return {"tutorial_completed": False, "tutorial_step": 0}
+
     if not result:
-        return {'tutorial_completed': False, 'tutorial_step': 0}
-    
+        return {"tutorial_completed": False, "tutorial_step": 0}
+
     return {
-        'tutorial_completed': result.get('tutorial_completed', False),
-        'tutorial_step': result.get('tutorial_step', 0)
+        "tutorial_completed": result.get("tutorial_completed", False),
+        "tutorial_step": result.get("tutorial_step", 0),
     }
 
 
-def update_user_tutorial_state(telegram_id: int, step: int = None, completed: bool = None) -> None:
+def update_user_tutorial_state(
+    telegram_id: int, step: int = None, completed: bool = None
+) -> None:
     """
     Update user's tutorial progress.
-    
+
     Args:
         telegram_id: User's Telegram ID
         step: Tutorial step (optional)
@@ -1183,37 +1406,37 @@ def update_user_tutorial_state(telegram_id: int, step: int = None, completed: bo
     """
     updates = []
     params = []
-    
+
     if step is not None:
         updates.append("tutorial_step = %s")
         params.append(step)
-    
+
     if completed is not None:
         updates.append("tutorial_completed = %s")
         params.append(completed)
-    
+
     if not updates:
         return
-    
+
     updates.append("updated_at = NOW()")
     params.append(telegram_id)
-    
+
     query = f"""
         UPDATE users 
         SET {', '.join(updates)}
         WHERE telegram_id = %s
     """
-    
+
     execute_query(query, params)
 
 
 def increment_user_message_count(telegram_id: int) -> int:
     """
     Increment user's total message count and return new count.
-    
+
     Args:
         telegram_id: User's Telegram ID
-        
+
     Returns:
         New total message count
     """
@@ -1224,16 +1447,16 @@ def increment_user_message_count(telegram_id: int) -> int:
         RETURNING total_messages_sent
     """
     result = execute_query(query, (telegram_id,), fetch_one=True)
-    return result.get('total_messages_sent', 0) if result else 0
+    return result.get("total_messages_sent", 0) if result else 0
 
 
 def should_show_quick_buy_warning(telegram_id: int) -> bool:
     """
     Check if user should see quick buy warning (low credits + not shown recently).
-    
+
     Args:
         telegram_id: User's Telegram ID
-        
+
     Returns:
         True if should show warning, False otherwise
     """
@@ -1259,24 +1482,24 @@ def should_show_quick_buy_warning(telegram_id: int) -> bool:
             WHERE telegram_id = %s
         """
         result = execute_query(query, (telegram_id,), fetch_one=True)
-    
+
     if not result:
         return False
-    
+
     # Get threshold from settings
-    threshold = int(get_bot_setting('quick_buy_trigger_threshold') or '5')
-    
+    threshold = int(get_bot_setting("quick_buy_trigger_threshold") or "5")
+
     # Show warning if credits are low and warning not shown in last 24 hours
     return (
-        result.get('message_credits', 0) <= threshold and
-        result.get('hours_since_warning', 25) >= 24  # 24+ hours since last warning
+        result.get("message_credits", 0) <= threshold
+        and result.get("hours_since_warning", 25) >= 24  # 24+ hours since last warning
     )
 
 
 def mark_low_credit_warning_shown(telegram_id: int) -> None:
     """
     Mark that low credit warning was shown to user.
-    
+
     Args:
         telegram_id: User's Telegram ID
     """
@@ -1291,10 +1514,10 @@ def mark_low_credit_warning_shown(telegram_id: int) -> None:
 def has_user_made_purchases(telegram_id: int) -> bool:
     """
     Check if user has made any purchases.
-    
+
     Args:
         telegram_id: User's Telegram ID
-        
+
     Returns:
         True if user has made purchases, False otherwise
     """
@@ -1304,32 +1527,33 @@ def has_user_made_purchases(telegram_id: int) -> bool:
         WHERE user_id = %s AND status = 'completed'
     """
     result = execute_query(query, (telegram_id,), fetch_one=True)
-    return result.get('purchase_count', 0) > 0 if result else False
+    return result.get("purchase_count", 0) > 0 if result else False
 
 
 # =============================================================================
 # BROADCAST AND MASS OPERATIONS FUNCTIONS
 # =============================================================================
 
+
 def get_all_user_ids() -> List[int]:
     """
     Get all user IDs for broadcasting.
-    
+
     Returns:
         List of user Telegram IDs
     """
     query = "SELECT telegram_id FROM users ORDER BY created_at DESC"
     result = execute_query(query, fetch_all=True)
-    return [row['telegram_id'] for row in result] if result else []
+    return [row["telegram_id"] for row in result] if result else []
 
 
 def get_active_user_ids(days: int = 7) -> List[int]:
     """
     Get IDs of users active within specified days.
-    
+
     Args:
         days: Number of days to look back for activity
-        
+
     Returns:
         List of active user Telegram IDs
     """
@@ -1340,16 +1564,16 @@ def get_active_user_ids(days: int = 7) -> List[int]:
         ORDER BY last_message_at DESC
     """
     result = execute_query(query, (days,), fetch_all=True)
-    return [row['telegram_id'] for row in result] if result else []
+    return [row["telegram_id"] for row in result] if result else []
 
 
 def get_low_credit_user_ids(threshold: int = 5) -> List[int]:
     """
     Get IDs of users with low credits.
-    
+
     Args:
         threshold: Credit threshold for "low" credits
-        
+
     Returns:
         List of low credit user Telegram IDs
     """
@@ -1360,16 +1584,16 @@ def get_low_credit_user_ids(threshold: int = 5) -> List[int]:
         ORDER BY message_credits ASC
     """
     result = execute_query(query, (threshold,), fetch_all=True)
-    return [row['telegram_id'] for row in result] if result else []
+    return [row["telegram_id"] for row in result] if result else []
 
 
 def get_new_user_ids(days: int = 7) -> List[int]:
     """
     Get IDs of new users within specified days.
-    
+
     Args:
         days: Number of days to look back for new users
-        
+
     Returns:
         List of new user Telegram IDs
     """
@@ -1380,7 +1604,7 @@ def get_new_user_ids(days: int = 7) -> List[int]:
         ORDER BY created_at DESC
     """
     result = execute_query(query, (days,), fetch_all=True)
-    return [row['telegram_id'] for row in result] if result else []
+    return [row["telegram_id"] for row in result] if result else []
 
 
 def log_broadcast(
@@ -1388,18 +1612,18 @@ def log_broadcast(
     message_text: str,
     target_audience: str,
     user_count: int,
-    status: str = 'pending'
+    status: str = "pending",
 ) -> Dict[str, Any]:
     """
     Log a broadcast operation.
-    
+
     Args:
         admin_id: Admin user ID who initiated the broadcast
         message_text: The broadcast message content
         target_audience: Description of target audience
         user_count: Number of users targeted
         status: Broadcast status (pending, completed, failed)
-        
+
     Returns:
         Broadcast log record
     """
@@ -1410,16 +1634,18 @@ def log_broadcast(
         RETURNING id, created_at
     """
     return execute_query(
-        query, 
+        query,
         (admin_id, message_text, target_audience, user_count, status),
-        fetch_one=True
+        fetch_one=True,
     )
 
 
-def update_broadcast_status(broadcast_id: int, status: str, delivered_count: int = 0) -> None:
+def update_broadcast_status(
+    broadcast_id: int, status: str, delivered_count: int = 0
+) -> None:
     """
     Update broadcast status and delivery count.
-    
+
     Args:
         broadcast_id: Broadcast log ID
         status: New status (completed, failed, partial)
@@ -1441,10 +1667,11 @@ def update_broadcast_status(broadcast_id: int, status: str, delivered_count: int
 # MISSING FUNCTIONS FOR MESSAGE ROUTING AND CONVERSATION MANAGEMENT
 # =============================================================================
 
+
 def update_user_last_message(telegram_id: int) -> None:
     """
     Update user's last message timestamp.
-    
+
     Args:
         telegram_id: User's Telegram ID
     """
@@ -1457,14 +1684,11 @@ def update_user_last_message(telegram_id: int) -> None:
 
 
 def store_message_reference(
-    user_message_id: int,
-    admin_message_id: int,
-    user_id: int,
-    topic_id: int
+    user_message_id: int, admin_message_id: int, user_id: int, topic_id: int
 ) -> None:
     """
     Store reference between user message and admin forwarded message.
-    
+
     Args:
         user_message_id: Original user message ID
         admin_message_id: Forwarded message ID in admin group
@@ -1484,17 +1708,14 @@ def store_message_reference(
     execute_query(query, (user_message_id, admin_message_id, user_id, topic_id))
 
 
-def get_topic_info(
-    admin_group_id: int, 
-    topic_id: int
-) -> Optional[Dict[str, Any]]:
+def get_topic_info(admin_group_id: int, topic_id: int) -> Optional[Dict[str, Any]]:
     """
     Get topic information by topic ID.
-    
+
     Args:
         admin_group_id: Admin group ID
         topic_id: Topic ID
-        
+
     Returns:
         Topic information dictionary
     """
@@ -1512,13 +1733,11 @@ def get_topic_info(
 
 
 def archive_conversation(
-    user_id: int, 
-    admin_group_id: int, 
-    reason: str = "User request"
+    user_id: int, admin_group_id: int, reason: str = "User request"
 ) -> None:
     """
     Archive a conversation.
-    
+
     Args:
         user_id: User's Telegram ID
         admin_group_id: Admin group ID
@@ -1535,13 +1754,10 @@ def archive_conversation(
     execute_query(query, (reason, user_id, admin_group_id))
 
 
-def update_conversation_last_message(
-    user_id: int, 
-    admin_group_id: int
-) -> None:
+def update_conversation_last_message(user_id: int, admin_group_id: int) -> None:
     """
     Update conversation's last message timestamp.
-    
+
     Args:
         user_id: User's Telegram ID
         admin_group_id: Admin group ID
@@ -1554,14 +1770,107 @@ def update_conversation_last_message(
     execute_query(query, (user_id, admin_group_id))
 
 
+def update_conversation_unread_count(
+    user_id: int, admin_group_id: int, increment: int = 1
+) -> None:
+    """
+    Update unread message count for a conversation.
+
+    Args:
+        user_id: User's Telegram ID
+        admin_group_id: Admin group ID
+        increment: Number to increment unread count by (can be negative to decrement)
+    """
+    query = """
+        UPDATE conversations 
+        SET unread_count = GREATEST(0, COALESCE(unread_count, 0) + %s),
+            updated_at = NOW()
+        WHERE user_id = %s AND admin_group_id = %s
+    """
+    execute_query(query, (increment, user_id, admin_group_id))
+
+
+def mark_conversation_as_read(user_id: int, admin_group_id: int) -> None:
+    """
+    Mark a conversation as read (reset unread count to 0).
+
+    Args:
+        user_id: User's Telegram ID
+        admin_group_id: Admin group ID
+    """
+    query = """
+        UPDATE conversations 
+        SET unread_count = 0,
+            last_read_at = NOW(),
+            updated_at = NOW()
+        WHERE user_id = %s AND admin_group_id = %s
+    """
+    execute_query(query, (user_id, admin_group_id))
+
+
+def get_total_unread_count(admin_group_id: int) -> int:
+    """
+    Get total unread message count across all conversations.
+
+    Args:
+        admin_group_id: Admin group ID
+
+    Returns:
+        Total unread message count
+    """
+    query = """
+        SELECT COALESCE(SUM(unread_count), 0) as total_unread
+        FROM conversations 
+        WHERE admin_group_id = %s AND status = 'open'
+    """
+    result = execute_query(query, (admin_group_id,), fetch_one=True)
+    return result.get("total_unread", 0) if result else 0
+
+
+def get_conversations_with_unread(
+    admin_group_id: int, limit: int = 20
+) -> List[Dict[str, Any]]:
+    """
+    Get conversations that have unread messages.
+
+    Args:
+        admin_group_id: Admin group ID
+        limit: Maximum number of conversations to return
+
+    Returns:
+        List of conversation dictionaries with unread counts
+    """
+    query = """
+        SELECT 
+            c.user_id,
+            c.topic_id,
+            c.unread_count,
+            c.last_user_message_at,
+            c.last_read_at,
+            u.first_name,
+            u.last_name,
+            u.username
+        FROM conversations c
+        JOIN users u ON c.user_id = u.telegram_id
+        WHERE c.admin_group_id = %s 
+        AND c.status = 'open' 
+        AND c.unread_count > 0
+        ORDER BY c.last_user_message_at DESC
+        LIMIT %s
+    """
+    result = execute_query(query, (admin_group_id, limit), fetch_all=True)
+    return result if result else []
+
+
 # =============================================================================
 # ADMIN ANALYTICS FUNCTIONS
 # =============================================================================
 
+
 def get_admin_analytics_data() -> Dict[str, Any]:
     """
     Get comprehensive analytics data for admin dashboard.
-    
+
     Returns:
         Dictionary with various analytics metrics
     """
@@ -1585,7 +1894,7 @@ def get_admin_analytics_data() -> Dict[str, Any]:
             FROM users
         """
         user_stats = execute_query(user_stats_query, fetch_one=True)
-        
+
         # Revenue statistics
         revenue_stats_query = """
             SELECT 
@@ -1616,7 +1925,7 @@ def get_admin_analytics_data() -> Dict[str, Any]:
             FROM transactions
         """
         revenue_stats = execute_query(revenue_stats_query, fetch_one=True)
-        
+
         # Credit statistics
         credit_stats_query = """
             SELECT 
@@ -1631,7 +1940,7 @@ def get_admin_analytics_data() -> Dict[str, Any]:
             FROM users
         """
         credit_stats = execute_query(credit_stats_query, fetch_one=True)
-        
+
         # Conversation statistics
         conversation_stats_query = """
             SELECT 
@@ -1645,7 +1954,7 @@ def get_admin_analytics_data() -> Dict[str, Any]:
             FROM conversations
         """
         conversation_stats = execute_query(conversation_stats_query, fetch_one=True)
-        
+
         # Product performance
         product_stats_query = """
             SELECT 
@@ -1661,33 +1970,33 @@ def get_admin_analytics_data() -> Dict[str, Any]:
             ORDER BY revenue_cents DESC
         """
         product_stats = execute_query(product_stats_query, fetch_all=True)
-        
+
         return {
-            'user_stats': user_stats or {},
-            'revenue_stats': revenue_stats or {},
-            'credit_stats': credit_stats or {},
-            'conversation_stats': conversation_stats or {},
-            'product_stats': product_stats or []
+            "user_stats": user_stats or {},
+            "revenue_stats": revenue_stats or {},
+            "credit_stats": credit_stats or {},
+            "conversation_stats": conversation_stats or {},
+            "product_stats": product_stats or [],
         }
-    
+
     except Exception as e:
         logger.error(f"Error getting admin analytics data: {e}")
         return {
-            'user_stats': {},
-            'revenue_stats': {},
-            'credit_stats': {},
-            'conversation_stats': {},
-            'product_stats': []
+            "user_stats": {},
+            "revenue_stats": {},
+            "credit_stats": {},
+            "conversation_stats": {},
+            "product_stats": [],
         }
 
 
 def get_daily_revenue_chart_data(days: int = 30) -> List[Dict[str, Any]]:
     """
     Get daily revenue data for charts.
-    
+
     Args:
         days: Number of days to include
-        
+
     Returns:
         List of daily revenue data
     """
@@ -1711,7 +2020,7 @@ def get_daily_revenue_chart_data(days: int = 30) -> List[Dict[str, Any]]:
         GROUP BY ds.date
         ORDER BY ds.date ASC
     """
-    
+
     result = execute_query(query, (days,), fetch_all=True)
     return result if result else []
 
@@ -1719,10 +2028,10 @@ def get_daily_revenue_chart_data(days: int = 30) -> List[Dict[str, Any]]:
 def get_user_growth_chart_data(days: int = 30) -> List[Dict[str, Any]]:
     """
     Get daily user growth data for charts.
-    
+
     Args:
         days: Number of days to include
-        
+
     Returns:
         List of daily user growth data
     """
@@ -1747,7 +2056,7 @@ def get_user_growth_chart_data(days: int = 30) -> List[Dict[str, Any]]:
         GROUP BY ds.date
         ORDER BY ds.date ASC
     """
-    
+
     result = execute_query(query, (days,), fetch_all=True)
     return result if result else []
 
@@ -1756,14 +2065,15 @@ def get_user_growth_chart_data(days: int = 30) -> List[Dict[str, Any]]:
 # ADMIN USER MANAGEMENT FUNCTIONS
 # =============================================================================
 
+
 def get_all_users(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
     """
     Get all users with pagination.
-    
+
     Args:
         limit: Maximum number of users to return
         offset: Number of users to skip
-        
+
     Returns:
         List of user dictionaries
     """
@@ -1791,27 +2101,24 @@ def get_all_users(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         ORDER BY created_at DESC
         LIMIT %s OFFSET %s
     """
-    
+
     result = execute_query(query, (limit, offset), fetch_all=True)
     return result if result else []
 
 
-def search_users(
-    search_term: str, 
-    limit: int = 50
-) -> List[Dict[str, Any]]:
+def search_users(search_term: str, limit: int = 50) -> List[Dict[str, Any]]:
     """
     Search users by username, first name, or last name.
-    
+
     Args:
         search_term: Search term
         limit: Maximum number of results
-        
+
     Returns:
         List of matching user dictionaries
     """
     search_pattern = f"%{search_term}%"
-    
+
     query = """
         SELECT 
             telegram_id,
@@ -1837,12 +2144,20 @@ def search_users(
             created_at DESC
         LIMIT %s
     """
-    
+
     result = execute_query(
-        query, 
-        (search_pattern, search_pattern, search_pattern, search_pattern,
-         search_term, search_term, search_term, limit), 
-        fetch_all=True
+        query,
+        (
+            search_pattern,
+            search_pattern,
+            search_pattern,
+            search_pattern,
+            search_term,
+            search_term,
+            search_term,
+            limit,
+        ),
+        fetch_all=True,
     )
     return result if result else []
 
@@ -1850,19 +2165,19 @@ def search_users(
 def gift_credits_to_user(telegram_id: int, credits: int, gifted_by: int) -> bool:
     """
     Gift credits to a user (admin function).
-    
+
     Args:
         telegram_id: User's Telegram ID
         credits: Number of credits to gift
         gifted_by: Admin user ID who gifted the credits
-        
+
     Returns:
         True if successful
     """
     try:
         # Update user credits
         update_user_credits(telegram_id, credits)
-        
+
         # Log the gift transaction
         query = """
             INSERT INTO transactions 
@@ -1870,33 +2185,31 @@ def gift_credits_to_user(telegram_id: int, credits: int, gifted_by: int) -> bool
              amount_paid_usd_cents, credits_granted, time_granted_seconds, status, description, created_at)
             VALUES (%s, NULL, NULL, NULL, %s, 0, %s, 0, 'completed', %s, NOW())
         """
-        
+
         idempotency_key = str(uuid.uuid4())
         description = f"Admin gift: {credits} credits (gifted by admin {gifted_by})"
-        
+
         execute_query(query, (telegram_id, idempotency_key, credits, description))
-        
-        logger.info(f"✅ Gifted {credits} credits to user {telegram_id} by admin {gifted_by}")
+
+        logger.info(
+            f"✅ Gifted {credits} credits to user {telegram_id} by admin {gifted_by}"
+        )
         return True
-    
+
     except Exception as e:
         logger.error(f"Failed to gift credits to user {telegram_id}: {e}")
         return False
 
 
-def ban_user(
-    telegram_id: int, 
-    banned_by: int, 
-    reason: str = "Admin decision"
-) -> bool:
+def ban_user(telegram_id: int, banned_by: int, reason: str = "Admin decision") -> bool:
     """
     Ban a user (admin function).
-    
+
     Args:
         telegram_id: User's Telegram ID
         banned_by: Admin user ID who banned the user
         reason: Reason for banning
-        
+
     Returns:
         True if successful
     """
@@ -1911,18 +2224,17 @@ def ban_user(
                 updated_at = NOW()
             WHERE telegram_id = %s
         """
-        
+
         execute_query(query, (banned_by, reason, telegram_id))
-        
+
         # Archive any active conversations
         archive_conversation(telegram_id, -1, f"User banned: {reason}")
-        
+
         logger.info(
-            f"✅ Banned user {telegram_id} by admin {banned_by}, "
-            f"reason: {reason}"
+            f"✅ Banned user {telegram_id} by admin {banned_by}, " f"reason: {reason}"
         )
         return True
-    
+
     except Exception as e:
         logger.error(f"Failed to ban user {telegram_id}: {e}")
         return False
@@ -1931,11 +2243,11 @@ def ban_user(
 def unban_user(telegram_id: int, unbanned_by: int) -> bool:
     """
     Unban a user (admin function).
-    
+
     Args:
         telegram_id: User's Telegram ID
         unbanned_by: Admin user ID who unbanned the user
-        
+
     Returns:
         True if successful
     """
@@ -1950,15 +2262,75 @@ def unban_user(telegram_id: int, unbanned_by: int) -> bool:
                 updated_at = NOW()
             WHERE telegram_id = %s
         """
-        
+
         execute_query(query, (telegram_id,))
-        
+
         logger.info(f"✅ Unbanned user {telegram_id} by admin {unbanned_by}")
         return True
-    
+
     except Exception as e:
         logger.error(f"Failed to unban user {telegram_id}: {e}")
         return False
 
 
-# Import uuid for idempotency keys 
+# Import uuid for idempotency keys
+
+
+def apply_unread_tracking_migration() -> None:
+    """
+    Add unread message tracking columns to conversations table.
+    """
+    try:
+        logger.info("🔧 Applying unread tracking migration...")
+
+        # Check if columns already exist
+        check_query = """
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'conversations' 
+            AND column_name IN ('unread_count', 'last_read_at')
+        """
+        existing_columns = execute_query(check_query, fetch_all=True)
+        existing_column_names = (
+            [col["column_name"] for col in existing_columns] if existing_columns else []
+        )
+
+        migrations = []
+
+        # Add unread_count column if it doesn't exist
+        if "unread_count" not in existing_column_names:
+            migrations.append(
+                "ALTER TABLE conversations ADD COLUMN unread_count INTEGER DEFAULT 0 NOT NULL"
+            )
+
+        # Add last_read_at column if it doesn't exist
+        if "last_read_at" not in existing_column_names:
+            migrations.append(
+                "ALTER TABLE conversations ADD COLUMN last_read_at TIMESTAMPTZ"
+            )
+
+        # Execute migrations
+        for migration in migrations:
+            try:
+                execute_query(migration)
+                logger.info(f"✅ Executed: {migration}")
+            except Exception as e:
+                logger.error(f"Failed to execute {migration}: {e}")
+
+        # Add index for performance
+        index_query = """
+            CREATE INDEX IF NOT EXISTS idx_conversations_unread 
+            ON conversations (admin_group_id, unread_count) 
+            WHERE status = 'open' AND unread_count > 0
+        """
+        try:
+            execute_query(index_query)
+            logger.info("✅ Added unread tracking index")
+        except Exception as e:
+            logger.warning(f"Could not add index: {e}")
+
+        logger.info("✅ Unread tracking migration completed")
+
+    except Exception as e:
+        logger.error(f"Failed to apply unread tracking migration: {e}")
+        # Don't raise - this is a migration, let the app continue

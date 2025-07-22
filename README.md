@@ -31,6 +31,13 @@ A production-ready, enterprise-grade Telegram bot that transforms a Telegram cha
 - **Performance Monitoring** - Health checks and error alerting
 - **Caching Layer** - Optimized performance for high-traffic scenarios
 
+### 🔌 **Plugin Architecture**
+- **Modular Design** - Clean separation of concerns with plugin system
+- **Core Plugins** - Essential bot functionality (commands, routing, error handling)
+- **Admin Plugins** - Advanced admin features (analytics, broadcast, user management)
+- **User Plugins** - User-facing features (purchases, tutorials)
+- **Extensible Framework** - Easy to add new features and capabilities
+
 ## 🏗️ Architecture
 
 ```
@@ -49,6 +56,7 @@ A production-ready, enterprise-grade Telegram bot that transforms a Telegram cha
 
 ### **Core Components**
 - **Flask Webhook Server** - Application factory pattern with security
+- **Plugin Manager** - Modular architecture for extensible functionality
 - **ThreadedConnectionPool** - Production-ready database connections
 - **Arbitrary Callback Data** - Secure inline keyboard interactions
 - **Comprehensive Error Handling** - Admin alerting and recovery
@@ -195,6 +203,26 @@ gunicorn --bind 0.0.0.0:8000 --workers 4 src.webhook_server:app
 
 ## 🔧 Development
 
+### **Plugin Architecture**
+The bot uses a modular plugin system for clean separation of concerns:
+
+```
+src/plugins/
+├── base_plugin.py          # Base plugin class
+├── plugin_manager.py       # Plugin management system
+├── core_plugins/           # Essential bot functionality
+│   ├── core_commands_plugin.py
+│   ├── error_handling_plugin.py
+│   └── message_routing_plugin.py
+├── admin_plugins/          # Admin features
+│   ├── analytics_plugin.py
+│   ├── broadcast_plugin.py
+│   └── user_management_plugin.py
+└── user_plugins/           # User-facing features
+    ├── purchase_plugin.py
+    └── tutorial_plugin.py
+```
+
 ### **Code Quality**
 ```bash
 # Install pre-commit hooks
@@ -207,7 +235,7 @@ pre-commit run --all-files
 
 ### **Testing**
 ```bash
-# Run tests (when implemented)
+# Run tests
 pytest
 
 # Check code coverage
@@ -284,8 +312,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🆘 Support
 
 ### **Documentation**
-- [API Reference](docs/DOCUMENTATION_INDEX.md)
-- [Deployment Guide](docs/deployment/DEPLOYMENT_REFERENCE.md)
+- [API Reference](project_documentation/docs/API_GUIDE.md)
+- [Function Specifications](project_documentation/docs/FUNCTION_SPECS.md)
+- [User Stories](project_documentation/docs/USER_STORIES.md)
 - [Database Schema](project_documentation/docs/schema.sql)
 
 ### **Issues**

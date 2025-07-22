@@ -4,6 +4,12 @@
 # Core Framework
 flask>=3.0.0
 gunicorn>=21.2.0
+requests
+uuid
+
+# Code Quality
+black
+ruff
 
 # Telegram Bot Library
 python-telegram-bot[ext]>=21.0.0
@@ -19,8 +25,6 @@ stripe>=7.0.0
 python-dotenv>=1.0.0
 
 # Development & Quality (for local development)
-black>=23.12.0
-ruff>=0.1.15
 pre-commit>=3.6.0
 
 # Security

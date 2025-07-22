@@ -46,9 +46,7 @@ def get_env_var(
     """
     value = os.getenv(var_name, default)
     if required and not value:
-        raise ConfigurationError(
-            f"Required environment variable {var_name} is not set"
-        )
+        raise ConfigurationError(f"Required environment variable {var_name} is not set")
     return value
 
 
@@ -69,17 +67,23 @@ def get_env_int(
     Raises:
         ConfigurationError: If required variable is missing or invalid
     """
-    value = get_env_var(var_name, required, str(default) if default is not None else None)
+    value = get_env_var(
+        var_name, required, str(default) if default is not None else None
+    )
     if value is None:
         return default
 
     try:
         return int(value)
     except ValueError as e:
-        raise ConfigurationError(f"Environment variable {var_name} must be an integer, got: {value}") from e
+        raise ConfigurationError(
+            f"Environment variable {var_name} must be an integer, got: {value}"
+        ) from e
 
 
-def get_env_bool(var_name: str, required: bool = True, default: Optional[bool] = None) -> Optional[bool]:
+def get_env_bool(
+    var_name: str, required: bool = True, default: Optional[bool] = None
+) -> Optional[bool]:
     """
     Get environment variable as boolean.
 
@@ -94,7 +98,9 @@ def get_env_bool(var_name: str, required: bool = True, default: Optional[bool] =
     Raises:
         ConfigurationError: If required variable is missing
     """
-    value = get_env_var(var_name, required, str(default).lower() if default is not None else None)
+    value = get_env_var(
+        var_name, required, str(default).lower() if default is not None else None
+    )
     if value is None:
         return default
 
@@ -107,7 +113,9 @@ def get_env_bool(var_name: str, required: bool = True, default: Optional[bool] =
 
 BOT_TOKEN = get_env_var("BOT_TOKEN")
 ADMIN_GROUP_ID = get_env_int("ADMIN_GROUP_ID")
-ADMIN_USER_ID = get_env_int("ADMIN_USER_ID", required=False)  # Optional: exclude admin from threads
+ADMIN_USER_ID = get_env_int(
+    "ADMIN_USER_ID", required=False
+)  # Optional: exclude admin from threads
 WEBHOOK_URL = get_env_var("WEBHOOK_URL", required=False)
 
 # =============================================================================
@@ -140,7 +148,9 @@ PORT = get_env_int("PORT", required=False, default=8000)
 GUNICORN_WORKERS = get_env_int("GUNICORN_WORKERS", required=False, default=4)
 GUNICORN_THREADS = get_env_int("GUNICORN_THREADS", required=False, default=2)
 GUNICORN_TIMEOUT = get_env_int("GUNICORN_TIMEOUT", required=False, default=30)
-GUNICORN_WORKER_CLASS = get_env_var("GUNICORN_WORKER_CLASS", required=False, default="sync")
+GUNICORN_WORKER_CLASS = get_env_var(
+    "GUNICORN_WORKER_CLASS", required=False, default="sync"
+)
 
 # =============================================================================
 # SECURITY CONFIGURATION
@@ -155,6 +165,16 @@ WEBHOOK_SECRET_TOKEN = get_env_var("WEBHOOK_SECRET_TOKEN", required=False)
 
 DEV_MODE = get_env_bool("DEV_MODE", required=False, default=False)
 DEBUG_WEBHOOKS = get_env_bool("DEBUG_WEBHOOKS", required=False, default=False)
+
+# ============================================================================
+# BOT BEHAVIOR AND UX
+# ============================================================================
+
+# Credit warning threshold
+CREDIT_WARNING_THRESHOLD = int(os.getenv("CREDIT_WARNING_THRESHOLD", 5))
+
+# Admin panel page size
+ADMIN_PANEL_PAGE_SIZE = int(os.getenv("ADMIN_PANEL_PAGE_SIZE", 10))
 
 
 def validate_config() -> None:
@@ -173,8 +193,12 @@ def validate_config() -> None:
         )
 
     # Validate Stripe API key format
-    if STRIPE_API_KEY and not (STRIPE_API_KEY.startswith("sk_test_") or STRIPE_API_KEY.startswith("sk_live_")):
-        raise ConfigurationError("STRIPE_API_KEY must start with 'sk_test_' or 'sk_live_'")
+    if STRIPE_API_KEY and not (
+        STRIPE_API_KEY.startswith("sk_test_") or STRIPE_API_KEY.startswith("sk_live_")
+    ):
+        raise ConfigurationError(
+            "STRIPE_API_KEY must start with 'sk_test_' or 'sk_live_'"
+        )
 
     # Validate Stripe webhook secret format
     if STRIPE_WEBHOOK_SECRET and not STRIPE_WEBHOOK_SECRET.startswith("whsec_"):
@@ -189,9 +213,13 @@ def validate_config() -> None:
     # Production safety checks
     if not DEV_MODE:
         if FLASK_DEBUG:
-            logger.warning("FLASK_DEBUG is enabled in production mode - this is not recommended")
+            logger.warning(
+                "FLASK_DEBUG is enabled in production mode - this is not recommended"
+            )
         if DEBUG_WEBHOOKS:
-            logger.warning("DEBUG_WEBHOOKS is enabled in production mode - this is not recommended")
+            logger.warning(
+                "DEBUG_WEBHOOKS is enabled in production mode - this is not recommended"
+            )
 
     logger.info("✅ Configuration validation passed")
 
@@ -233,9 +261,13 @@ if DEV_MODE:
     logger.info("Configuration summary:")
     logger.info(f"  - BOT_TOKEN: {'***' + BOT_TOKEN[-8:] if BOT_TOKEN else 'Not set'}")
     logger.info(f"  - ADMIN_GROUP_ID: {ADMIN_GROUP_ID}")
-    logger.info(f"  - DATABASE_URL: {'***' + DATABASE_URL[-20:] if DATABASE_URL else 'Not set'}")
-    logger.info(f"  - STRIPE_API_KEY: {'***' + STRIPE_API_KEY[-8:] if STRIPE_API_KEY else 'Not set'}")
+    logger.info(
+        f"  - DATABASE_URL: {'***' + DATABASE_URL[-20:] if DATABASE_URL else 'Not set'}"
+    )
+    logger.info(
+        f"  - STRIPE_API_KEY: {'***' + STRIPE_API_KEY[-8:] if STRIPE_API_KEY else 'Not set'}"
+    )
     logger.info(f"  - DB_POOL_MAX_CONN: {DB_POOL_MAX_CONN}")
     logger.info(f"  - Recommended pool size: {get_db_pool_size()}")
     logger.info(f"  - DEV_MODE: {DEV_MODE}")
-    logger.info(f"  - FLASK_DEBUG: {FLASK_DEBUG}") 
+    logger.info(f"  - FLASK_DEBUG: {FLASK_DEBUG}")
