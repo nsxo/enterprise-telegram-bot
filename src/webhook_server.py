@@ -47,15 +47,16 @@ def create_flask_app() -> Flask:
     from src.database import init_connection_pool
     init_connection_pool()
     
-    # Initialize Telegram application
+    # Initialize and START Telegram application immediately
     global telegram_app
     telegram_app = create_application()
+    start_telegram_application()
     
     # Register routes
     register_routes(app)
     register_error_handlers(app)
     
-    logger.info("✅ Flask webhook server initialized")
+    logger.info("✅ Flask webhook server initialized with Telegram app running")
     return app
 
 
@@ -76,15 +77,11 @@ def register_routes(app: Flask) -> None:
             JSON response with status
         """
         try:
-            # Ensure Telegram app is started (lazy initialization)
+            # Telegram app is already started in create_flask_app()
             global telegram_app
             if not telegram_app or not hasattr(telegram_app, 'bot'):
-                try:
-                    start_telegram_application()
-                    logger.info("✅ Telegram application started on first request")
-                except Exception as e:
-                    logger.error(f"Failed to start Telegram app: {e}")
-                    return jsonify({'error': 'Telegram service unavailable'}), 503
+                logger.error("Telegram app not initialized")
+                return jsonify({'error': 'Telegram service unavailable'}), 503
             
             # Verify webhook secret token if configured
             if WEBHOOK_SECRET_TOKEN:
@@ -451,8 +448,8 @@ atexit.register(shutdown_telegram_application)
 # Create the Flask app for Gunicorn to import
 app = create_flask_app()
 
-# Telegram application will start on first request for production safety
-logger.info("✅ Webhook server ready - Telegram app will initialize on first request")
+# Telegram application is already started
+logger.info("✅ Webhook server ready - Telegram app is running")
 
 if __name__ == '__main__':
     """
