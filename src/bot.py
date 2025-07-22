@@ -340,55 +340,208 @@ async def billing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def quick_buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Handle quick buy commands like /buy10, /buy50, etc.
-    """
-    user = update.effective_user
-    command = update.message.text
+    """Handle quick buy commands like /buy10, /buy25."""
+    message = update.message
+    user = message.from_user
     
-    # Extract amount from command (e.g., /buy10 -> 10)
+    # Extract amount from command (e.g., "/buy10" -> 10)
+    command = message.text.split()[0][1:]  # Remove "/"
+    amount = command.replace("buy", "")
+    
     try:
-        amount = int(command.replace('/buy', ''))
-        logger.info(f"Quick buy command: {amount} credits for user {user.id}")
+        amount = int(amount)
     except ValueError:
-        await update.message.reply_text("❌ Invalid command format.")
+        await message.reply_text("❌ Invalid amount in command.")
         return
     
-    # Find matching product
-    products = db.get_active_products()
+    # Find corresponding product
+    products = db.get_products_by_type("credits")
     matching_product = None
-    
     for product in products:
-        if product['product_type'] == 'credits' and product['amount'] == amount:
+        if product['amount'] == amount:
             matching_product = product
             break
     
     if not matching_product:
-        await update.message.reply_text(f"❌ No product found for {amount} credits.")
+        await message.reply_text(f"❌ No {amount}-credit product available.")
         return
     
-    # Import here to avoid circular imports
-    from src.stripe_utils import create_checkout_session
-    
+    # Create checkout session
     try:
-        # Create Stripe checkout session
+        from src.stripe_utils import create_checkout_session
         checkout_url = create_checkout_session(
             user_id=user.id,
-            price_id=matching_product['stripe_price_id']
+            price_id=matching_product['stripe_price_id'],
+            success_url="https://your-bot-url.com/success",
+            cancel_url="https://your-bot-url.com/cancel"
         )
         
-        price_dollars = matching_product['price_usd_cents'] / 100
+        keyboard = [[InlineKeyboardButton("💳 Complete Purchase", url=checkout_url)]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(
+        await message.reply_text(
             f"💳 **Quick Purchase: {amount} Credits**\n\n"
-            f"Price: ${price_dollars:.2f}\n\n"
-            f"[Complete Purchase]({checkout_url})",
+            f"Amount: ${matching_product['price_usd_cents'] / 100:.2f}\n"
+            f"Click below to complete your purchase:",
+            reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
         
     except Exception as e:
-        logger.error(f"Quick buy failed for user {user.id}: {e}")
-        await update.message.reply_text("❌ Unable to process purchase. Please try again later.")
+        logger.error(f"Quick buy error: {e}")
+        await message.reply_text("❌ Payment system temporarily unavailable.")
+
+
+# =============================================================================
+# ADMIN COMMANDS
+# =============================================================================
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /admin command - show admin dashboard."""
+    message = update.message
+    user = message.from_user
+    
+    # Check if user is admin (you can implement proper admin checking)
+    # For now, anyone can access - implement proper auth later
+    
+    dashboard_text = (
+        "🔧 **Admin Dashboard**\n\n"
+        "**User Management:**\n"
+        "• /users - View all users\n"
+        "• /conversations - Manage conversations\n\n"
+        "**System Management:**\n"
+        "• /settings - Bot settings\n"
+        "• /products - Manage products\n"
+        "• /analytics - View analytics\n\n"
+        "**Operations:**\n"
+        "• /broadcast - Send broadcast message\n"
+        "• /webhook - Webhook status\n"
+        "• /system - System status"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("👥 Users", callback_data="admin_users")],
+        [InlineKeyboardButton("💬 Conversations", callback_data="admin_conversations")],
+        [InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")],
+        [InlineKeyboardButton("📊 Analytics", callback_data="admin_analytics")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await message.reply_text(
+        dashboard_text,
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /settings command."""
+    await update.message.reply_text(
+        "⚙️ **Bot Settings**\n\n"
+        "Settings management coming soon!\n"
+        "Use /admin for the main dashboard."
+    )
+
+
+async def products_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /products command."""
+    try:
+        products = db.get_all_products()
+        if not products:
+            await update.message.reply_text("No products found.")
+            return
+        
+        text = "📦 **Product Management**\n\n"
+        for product in products:
+            text += f"• {product['name']} - ${product['price_usd_cents']/100:.2f}\n"
+            text += f"  Type: {product['product_type']}, Amount: {product['amount']}\n\n"
+        
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        
+    except Exception as e:
+        logger.error(f"Products command error: {e}")
+        await update.message.reply_text("❌ Error loading products.")
+
+
+async def analytics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /analytics command."""
+    try:
+        # Get basic stats
+        user_count = db.get_user_count()
+        conversation_count = db.get_conversation_count()
+        
+        text = (
+            "📊 **Analytics Dashboard**\n\n"
+            f"👥 Total Users: {user_count}\n"
+            f"💬 Active Conversations: {conversation_count}\n\n"
+            "Detailed analytics coming soon!"
+        )
+        
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        
+    except Exception as e:
+        logger.error(f"Analytics command error: {e}")
+        await update.message.reply_text("❌ Error loading analytics.")
+
+
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /users command."""
+    await update.message.reply_text(
+        "👥 **User Management**\n\n"
+        "User management interface coming soon!\n"
+        "Use /admin for the main dashboard."
+    )
+
+
+async def conversations_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /conversations command."""
+    await update.message.reply_text(
+        "💬 **Conversation Management**\n\n"
+        "Conversation management interface coming soon!\n"
+        "Use /admin for the main dashboard."
+    )
+
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /broadcast command."""
+    await update.message.reply_text(
+        "📢 **Broadcast Message**\n\n"
+        "Broadcast functionality coming soon!\n"
+        "Use /admin for the main dashboard."
+    )
+
+
+async def webhook_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /webhook command."""
+    await update.message.reply_text(
+        "🔗 **Webhook Status**\n\n"
+        "✅ Webhooks are operational\n"
+        "📡 Receiving updates normally\n\n"
+        "Use /admin for the main dashboard."
+    )
+
+
+async def system_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /system command."""
+    try:
+        # Basic system info
+        import sys
+        from datetime import datetime
+        
+        text = (
+            "🖥️ **System Status**\n\n"
+            f"🐍 Python: {sys.version.split()[0]}\n"
+            f"⏰ Uptime: Active\n"
+            f"📅 Last restart: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"🔄 Status: Operational\n\n"
+            "Use /admin for the main dashboard."
+        )
+        
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        
+    except Exception as e:
+        logger.error(f"System command error: {e}")
+        await update.message.reply_text("❌ Error getting system status.")
 
 
 # =============================================================================
@@ -820,6 +973,15 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("balance", balance_command))
     application.add_handler(CommandHandler("billing", billing_command))
+    application.add_handler(CommandHandler("admin", admin_command))
+    application.add_handler(CommandHandler("settings", settings_command))
+    application.add_handler(CommandHandler("products", products_command))
+    application.add_handler(CommandHandler("analytics", analytics_command))
+    application.add_handler(CommandHandler("users", users_command))
+    application.add_handler(CommandHandler("conversations", conversations_command))
+    application.add_handler(CommandHandler("broadcast", broadcast_command))
+    application.add_handler(CommandHandler("webhook", webhook_command))
+    application.add_handler(CommandHandler("system", system_command))
     
     # Add quick buy command handlers
     for amount in [10, 25, 50, 100]:

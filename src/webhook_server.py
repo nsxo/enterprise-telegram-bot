@@ -49,8 +49,14 @@ def create_flask_app() -> Flask:
     init_connection_pool()
     
     # Apply critical database migrations
-    from src.database import apply_conversation_table_fix
-    apply_conversation_table_fix()
+    try:
+        from src.database import apply_conversation_table_fix
+        logger.info("🔧 About to run database migration...")
+        apply_conversation_table_fix()
+        logger.info("✅ Database migration completed successfully")
+    except Exception as e:
+        logger.error(f"❌ Database migration failed: {e}")
+        # Continue anyway - don't crash the app
     
     # Initialize and START Telegram application immediately
     global telegram_app

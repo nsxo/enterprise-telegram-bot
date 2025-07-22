@@ -388,6 +388,35 @@ def get_revenue_analytics(days: int = 30) -> List[Dict[str, Any]]:
 
 
 # =============================================================================
+# ANALYTICS FUNCTIONS
+# =============================================================================
+
+def get_user_count() -> int:
+    """Get total number of users."""
+    query = "SELECT COUNT(*) as count FROM users"
+    result = execute_query(query, fetch_one=True)
+    return result['count'] if result else 0
+
+
+def get_conversation_count() -> int:
+    """Get total number of active conversations."""
+    query = "SELECT COUNT(*) as count FROM conversations WHERE status = 'open'"
+    result = execute_query(query, fetch_one=True)
+    return result['count'] if result else 0
+
+
+def get_all_products() -> List[Dict[str, Any]]:
+    """Get all products."""
+    query = """
+        SELECT id, product_type, name, description, stripe_price_id, 
+               amount, price_usd_cents, is_active, sort_order
+        FROM products 
+        ORDER BY sort_order ASC, created_at DESC
+    """
+    return execute_query(query, fetch_all=True)
+
+
+# =============================================================================
 # DATABASE MIGRATIONS
 # =============================================================================
 
@@ -399,59 +428,15 @@ def apply_conversation_table_fix() -> None:
     try:
         logger.info("🔧 Applying conversations table constraint fix...")
         
-        # First, check if the problematic constraint exists
-        check_constraint_query = """
-            SELECT constraint_name 
-            FROM information_schema.table_constraints 
-            WHERE table_name = 'conversations' 
-            AND constraint_type = 'UNIQUE'
-            AND constraint_name LIKE '%deferrable%'
+        # Simple approach: just try to add the constraint we need
+        # If it already exists, PostgreSQL will give us an error we can ignore
+        add_constraint_query = """
+            ALTER TABLE conversations 
+            ADD CONSTRAINT IF NOT EXISTS conversations_user_admin_unique 
+            UNIQUE (user_id, admin_group_id)
         """
-        result = execute_query(check_constraint_query, fetch_all=True)
-        
-        if result:
-            logger.info("Found deferrable constraint, dropping and recreating...")
-            
-            # Drop the problematic constraint
-            drop_constraint_query = """
-                ALTER TABLE conversations 
-                DROP CONSTRAINT IF EXISTS conversations_user_id_admin_group_id_status_key
-            """
-            execute_query(drop_constraint_query)
-            
-            # Add the simple constraint
-            add_constraint_query = """
-                ALTER TABLE conversations 
-                ADD CONSTRAINT conversations_user_admin_unique 
-                UNIQUE (user_id, admin_group_id)
-            """
-            execute_query(add_constraint_query)
-            
-            logger.info("✅ Conversations table constraint fixed successfully")
-        else:
-            logger.info("No problematic constraint found, checking for correct constraint...")
-            
-            # Check if our desired constraint exists
-            check_correct_query = """
-                SELECT constraint_name 
-                FROM information_schema.table_constraints 
-                WHERE table_name = 'conversations' 
-                AND constraint_type = 'UNIQUE'
-                AND constraint_name = 'conversations_user_admin_unique'
-            """
-            result = execute_query(check_correct_query, fetch_one=True)
-            
-            if not result:
-                logger.info("Adding missing unique constraint...")
-                add_constraint_query = """
-                    ALTER TABLE conversations 
-                    ADD CONSTRAINT conversations_user_admin_unique 
-                    UNIQUE (user_id, admin_group_id)
-                """
-                execute_query(add_constraint_query)
-                logger.info("✅ Added conversations unique constraint")
-            else:
-                logger.info("✅ Conversations constraint already correct")
+        execute_query(add_constraint_query)
+        logger.info("✅ Conversations table constraint ensured")
                 
     except Exception as e:
         logger.error(f"Failed to apply conversations table fix: {e}")
