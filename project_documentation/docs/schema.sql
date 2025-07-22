@@ -37,8 +37,14 @@ CREATE TABLE users (
     tier_id INT NOT NULL DEFAULT 1 REFERENCES tiers(id),
     is_banned BOOLEAN DEFAULT FALSE,
     auto_recharge_enabled BOOLEAN DEFAULT FALSE,
-    auto_recharge_product_id INT,
+    auto_recharge_product_id INT REFERENCES products(id),
+    auto_recharge_threshold INT DEFAULT 5,
     stripe_customer_id VARCHAR(255) UNIQUE,
+    tutorial_completed BOOLEAN DEFAULT FALSE,
+    tutorial_step INTEGER DEFAULT 0,
+    is_new_user BOOLEAN DEFAULT TRUE,
+    total_messages_sent INTEGER DEFAULT 0,
+    last_low_credit_warning_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -93,22 +99,50 @@ CREATE TABLE transactions (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Bot Settings Table: Dynamic configuration management
-CREATE TABLE bot_settings (
-    key VARCHAR(255) PRIMARY KEY,
-    value TEXT,
-    description TEXT,
-    value_type VARCHAR(50) DEFAULT 'string', -- 'string', 'integer', 'boolean', 'json'
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_by BIGINT REFERENCES users(telegram_id)
+-- Message References Table: Links user messages to admin group messages
+CREATE TABLE message_references (
+    id SERIAL PRIMARY KEY,
+    user_message_id BIGINT NOT NULL,
+    admin_message_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    topic_id INT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    -- Ensure one reference per user message
+    UNIQUE (user_message_id, user_id)
 );
 
--- Insert default bot settings
+-- Add missing columns to users table (these will be added by migration)
+-- Note: These columns are already in the application's migration function
+-- last_message_at TIMESTAMPTZ,
+-- banned_at TIMESTAMPTZ,
+-- banned_by BIGINT,
+-- ban_reason TEXT,
+-- archive_reason TEXT,
+-- archived_at TIMESTAMPTZ,
+
+-- Bot Settings Table: Key-value store for configuration
+CREATE TABLE bot_settings (
+    key VARCHAR(255) PRIMARY KEY,
+    value TEXT NOT NULL,
+    description TEXT,
+    value_type VARCHAR(50) DEFAULT 'string',
+    updated_by BIGINT REFERENCES users(telegram_id),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Default bot settings
 INSERT INTO bot_settings (key, value, description, value_type) VALUES
-    ('welcome_message', 'Welcome to our Enterprise Telegram Bot! 🤖', 'Message shown to new users', 'string'),
-    ('message_cost_credits', '1', 'Credits cost per message', 'integer'),
-    ('max_daily_messages', '100', 'Maximum messages per day for standard users', 'integer'),
-    ('maintenance_mode', 'false', 'Enable maintenance mode', 'boolean');
+    ('new_user_free_credits', '3', 'Free credits given to new users', 'integer'),
+    ('welcome_message_new', 'Welcome, {first_name}! 🎉\n\nYou''ve received {free_credits} FREE credits to get started! 🎁\n\n✨ What can I help you with today?', 'Welcome message for new users', 'string'),
+    ('welcome_message_returning', 'Welcome back, {first_name}! 👋\n\n💰 Your balance: {credits} credits', 'Welcome message for returning users', 'string'),
+    ('tutorial_enabled', 'true', 'Enable interactive tutorial for new users', 'boolean'),
+    ('tutorial_completion_bonus', '2', 'Bonus credits for completing tutorial', 'integer'),
+    ('progress_bar_max_credits', '100', 'Maximum credits for 100% progress bar display', 'integer'),
+    ('balance_low_threshold', '5', 'Credits threshold for low balance warning', 'integer'),
+    ('balance_critical_threshold', '2', 'Credits threshold for critical balance warning', 'integer'),
+    ('quick_buy_enabled', 'true', 'Enable quick buy buttons for low credit situations', 'boolean'),
+    ('quick_buy_trigger_threshold', '5', 'Show quick buy options when credits below this', 'integer'),
+    ('low_credit_warning_message', 'Running low on credits! 💡 Quick top-up options below:', 'Message shown with quick buy buttons', 'string');
 
 -- Performance Indexes: Optimized for common query patterns
 CREATE INDEX idx_users_tier_id ON users(tier_id);
@@ -129,12 +163,13 @@ CREATE INDEX idx_products_type ON products(product_type);
 CREATE INDEX idx_products_active ON products(is_active);
 CREATE INDEX idx_products_sort_order ON products(sort_order);
 
--- Enhanced Business Intelligence View
+-- Analytics and Reporting Views
 CREATE OR REPLACE VIEW user_dashboard_view AS
 SELECT
     u.telegram_id,
     u.username,
     u.first_name,
+    u.last_name,
     u.message_credits,
     u.time_credits_expires_at,
     t.name as tier_name,
@@ -155,7 +190,7 @@ LEFT JOIN
 LEFT JOIN
     conversations c ON u.telegram_id = c.user_id AND c.status = 'open'
 GROUP BY
-    u.telegram_id, u.username, u.first_name, u.message_credits, 
+    u.telegram_id, u.username, u.first_name, u.last_name, u.message_credits, 
     u.time_credits_expires_at, t.name, t.permissions, u.created_at,
     u.auto_recharge_enabled, c.topic_id, c.last_user_message_at, c.status;
 
@@ -196,9 +231,9 @@ $$ language 'plpgsql';
 
 -- Triggers
 CREATE TRIGGER update_users_modtime
-    BEFORE UPDATE ON users
-    FOR EACH ROW
-    EXECUTE FUNCTION update_modified_column();
+BEFORE UPDATE ON users
+FOR EACH ROW
+EXECUTE FUNCTION update_modified_column();
 
 CREATE TRIGGER update_bot_settings_modtime
     BEFORE UPDATE ON bot_settings

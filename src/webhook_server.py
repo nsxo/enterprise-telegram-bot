@@ -15,7 +15,7 @@ from telegram.ext import Application
 
 from src.config import BOT_TOKEN, WEBHOOK_SECRET_TOKEN, DEBUG_WEBHOOKS
 from src.stripe_utils import verify_webhook_signature, process_webhook_event, StripeError
-from src.bot import create_application
+from src.bot_factory import create_application
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +50,25 @@ def create_flask_app() -> Flask:
     
     # Apply critical database migrations
     try:
-        from src.database import apply_conversation_table_fix, ensure_sample_products
+        from src.database import (
+            apply_conversation_table_fix, 
+            ensure_sample_products, 
+            apply_database_views_and_functions,
+            apply_enhanced_ux_migration
+        )
         logger.info("🔧 About to run database migration...")
         apply_conversation_table_fix()
         logger.info("✅ Database migration completed successfully")
+        
+        # Apply enhanced UX migration
+        logger.info("🔧 Applying enhanced UX migration...")
+        apply_enhanced_ux_migration()
+        logger.info("✅ Enhanced UX migration completed")
+        
+        # Apply database views and functions
+        logger.info("🔧 Applying database views and functions...")
+        apply_database_views_and_functions()
+        logger.info("✅ Database views and functions applied")
         
         # Ensure we have sample products for testing
         logger.info("🛍️ Ensuring sample products exist...")

@@ -244,58 +244,159 @@ def verify_webhook_signature(payload: bytes, signature: str) -> Dict[str, Any]:
         raise StripeError("Invalid signature")
 
 
-def process_checkout_completed(event: Dict[str, Any]) -> bool:
+# =============================================================================
+# AUTO-RECHARGE SYSTEM
+# =============================================================================
+
+def trigger_auto_recharge(user_id: int, product_price_id: str, product_name: str) -> bool:
     """
-    Process checkout.session.completed webhook event.
+    Trigger auto-recharge for a user with low credits.
     
     Args:
-        event: Stripe webhook event
+        user_id: User's Telegram ID
+        product_price_id: Stripe price ID for auto-recharge product
+        product_name: Name of the product for logging
         
     Returns:
-        True if processed successfully
+        True if auto-recharge was triggered successfully
     """
-    session = event['data']['object']
-    logger.info(f"Processing checkout completed: {session['id']}")
+    logger.info(f"Triggering auto-recharge for user {user_id}, product: {product_name}")
     
     try:
-        # Extract metadata
-        user_id = int(session['metadata']['user_id'])
-        product_id = int(session['metadata']['product_id'])
-        transaction_id = session['metadata']['transaction_id']
-        credits_granted = int(session['metadata']['credits_granted'])
-        time_granted_seconds = int(session['metadata']['time_granted_seconds'])
+        # Get user data
+        user_data = db.get_user(user_id)
+        if not user_data or not user_data.get('stripe_customer_id'):
+            logger.warning(f"Cannot auto-recharge user {user_id}: No Stripe customer")
+            return False
         
-        # Get payment intent to get charge ID
-        payment_intent = stripe.PaymentIntent.retrieve(session['payment_intent'])
-        charge_id = payment_intent['charges']['data'][0]['id'] if payment_intent['charges']['data'] else None
+        # Check for recent failed payments
+        recent_failures = db.check_failed_payments(user_id, days=7)
+        if recent_failures >= 3:
+            logger.warning(f"Skipping auto-recharge for user {user_id}: {recent_failures} recent failed payments")
+            # Disable auto-recharge to prevent continued failures
+            db.disable_auto_recharge(user_id)
+            return False
         
-        # Update transaction status
-        db.update_transaction_status(
-            transaction_id=transaction_id,
-            status='completed',
-            stripe_charge_id=charge_id
+        # Generate idempotency key
+        idempotency_key = str(uuid.uuid4())
+        
+        # Create payment intent for auto-recharge (not checkout session)
+        payment_intent = stripe.PaymentIntent.create(
+            amount=db.get_product_by_stripe_price_id(product_price_id)['price_usd_cents'],
+            currency='usd',
+            customer=user_data['stripe_customer_id'],
+            confirm=True,
+            off_session=True,  # Indicates this is for an existing customer
+            metadata={
+                'user_id': str(user_id),
+                'auto_recharge': 'true',
+                'product_name': product_name
+            },
+            idempotency_key=idempotency_key,
         )
         
-        # Grant credits or time to user
-        if credits_granted > 0:
-            db.update_user_credits(user_id, credits_granted)
-            logger.info(f"✅ Granted {credits_granted} credits to user {user_id}")
-        
-        if time_granted_seconds > 0:
-            # Time-based access logic would go here
-            logger.info(f"✅ Granted {time_granted_seconds} seconds of time access to user {user_id}")
-        
-        logger.info(f"✅ Successfully processed checkout for user {user_id}")
+        logger.info(f"✅ Auto-recharge payment intent created for user {user_id}: {payment_intent.id}")
         return True
         
+    except stripe.error.CardError as e:
+        # Card was declined
+        logger.warning(f"Auto-recharge card declined for user {user_id}: {e}")
+        return False
+        
+    except stripe.error.AuthenticationError as e:
+        # Authentication with Stripe failed
+        logger.error(f"Auto-recharge authentication error: {e}")
+        return False
+        
     except Exception as e:
-        logger.error(f"Error processing checkout completed: {e}")
+        logger.error(f"Auto-recharge failed for user {user_id}: {e}")
         return False
 
 
+async def process_auto_recharge_users(telegram_app):
+    """
+    Process all users who need auto-recharge.
+    Should be called periodically (e.g., every hour).
+    
+    Args:
+        telegram_app: Telegram application instance for sending notifications
+    """
+    logger.info("🔄 Processing auto-recharge users...")
+    
+    try:
+        users_needing_recharge = db.get_users_needing_auto_recharge()
+        
+        if not users_needing_recharge:
+            logger.info("No users need auto-recharge at this time")
+            return
+        
+        logger.info(f"Found {len(users_needing_recharge)} users needing auto-recharge")
+        
+        for user_data in users_needing_recharge:
+            user_id = user_data['telegram_id']
+            product_name = user_data['product_name']
+            price_id = user_data['stripe_price_id']
+            
+            try:
+                # Attempt auto-recharge
+                success = trigger_auto_recharge(user_id, price_id, product_name)
+                
+                if success:
+                    # Send success notification to user
+                    message = (
+                        f"🔄 **Auto-Recharge Successful!**\n\n"
+                        f"Your account has been automatically recharged with **{product_name}**.\n\n"
+                        f"💰 **Credits added to your balance**\n"
+                        f"🔔 **Auto-recharge keeps you connected**\n\n"
+                        f"Use /balance to see your updated balance."
+                    )
+                    
+                    try:
+                        await telegram_app.bot.send_message(
+                            chat_id=user_id,
+                            text=message,
+                            parse_mode='Markdown'
+                        )
+                    except Exception as msg_error:
+                        logger.warning(f"Failed to send auto-recharge success message to user {user_id}: {msg_error}")
+                        
+                else:
+                    # Send failure notification to user
+                    message = (
+                        f"⚠️ **Auto-Recharge Failed**\n\n"
+                        f"We couldn't automatically recharge your account.\n\n"
+                        f"💳 **Please check your payment method**\n"
+                        f"🔧 **Update billing info:** /billing\n"
+                        f"🛒 **Manual purchase:** /buy\n\n"
+                        f"Your auto-recharge is still enabled and will try again when your credits get low."
+                    )
+                    
+                    try:
+                        await telegram_app.bot.send_message(
+                            chat_id=user_id,
+                            text=message,
+                            parse_mode='Markdown'
+                        )
+                    except Exception as msg_error:
+                        logger.warning(f"Failed to send auto-recharge failure message to user {user_id}: {msg_error}")
+                
+            except Exception as e:
+                logger.error(f"Error processing auto-recharge for user {user_id}: {e}")
+                continue
+        
+        logger.info(f"✅ Completed auto-recharge processing for {len(users_needing_recharge)} users")
+        
+    except Exception as e:
+        logger.error(f"Error in auto-recharge processing: {e}")
+
+
+# =============================================================================
+# PAYMENT FAILURE HANDLING
+# =============================================================================
+
 def process_payment_failed(event: Dict[str, Any]) -> bool:
     """
-    Process payment_intent.payment_failed webhook event.
+    Enhanced payment failure processing with user notifications.
     
     Args:
         event: Stripe webhook event
@@ -314,15 +415,25 @@ def process_payment_failed(event: Dict[str, Any]) -> bool:
             return True
         
         user_id = int(user_id)
+        is_auto_recharge = payment_intent['metadata'].get('auto_recharge') == 'true'
         
-        # Find and update relevant transaction
-        # This is a simplified approach - in production you might want more robust tracking
-        logger.info(f"Payment failed for user {user_id}: {payment_intent.get('last_payment_error', {}).get('message', 'Unknown error')}")
+        # Get failure reason
+        last_error = payment_intent.get('last_payment_error', {})
+        failure_code = last_error.get('code', 'unknown')
+        failure_message = last_error.get('message', 'Payment failed')
         
-        # You could implement logic here to:
-        # 1. Disable auto-recharge if this was a subscription payment
-        # 2. Send notification to user about payment failure
-        # 3. Log the failure for business intelligence
+        logger.info(f"Payment failed for user {user_id}: {failure_code} - {failure_message}")
+        
+        # Check if this user has had multiple recent failures
+        recent_failures = db.check_failed_payments(user_id, days=7)
+        
+        # Disable auto-recharge if too many failures
+        if is_auto_recharge and recent_failures >= 2:
+            db.disable_auto_recharge(user_id)
+            logger.info(f"Disabled auto-recharge for user {user_id} due to {recent_failures + 1} failed payments")
+        
+        # Log the failure in our database (you may want to implement this)
+        # db.log_payment_failure(user_id, payment_intent['id'], failure_code, failure_message)
         
         return True
         
@@ -486,6 +597,58 @@ def format_price(amount_cents: int) -> str:
 
 
 # Test Stripe connection on module import
+def process_checkout_completed(event: Dict[str, Any]) -> bool:
+    """
+    Enhanced checkout completion processing.
+    
+    Args:
+        event: Stripe webhook event
+        
+    Returns:
+        True if processed successfully
+    """
+    session = event['data']['object']
+    logger.info(f"Processing checkout completed: {session['id']}")
+    
+    try:
+        # Extract metadata
+        user_id = int(session['metadata']['user_id'])
+        product_id = int(session['metadata']['product_id'])
+        transaction_id = session['metadata']['transaction_id']
+        credits_granted = int(session['metadata']['credits_granted'])
+        time_granted_seconds = int(session['metadata']['time_granted_seconds'])
+        
+        # Get payment intent to get charge ID
+        payment_intent = stripe.PaymentIntent.retrieve(session['payment_intent'])
+        charge_id = payment_intent['charges']['data'][0]['id'] if payment_intent['charges']['data'] else None
+        
+        # Update transaction status
+        db.update_transaction_status(
+            transaction_id=transaction_id,
+            status='completed',
+            stripe_charge_id=charge_id
+        )
+        
+        # Grant credits or time to user
+        if credits_granted > 0:
+            db.update_user_credits(user_id, credits_granted)
+            logger.info(f"✅ Granted {credits_granted} credits to user {user_id}")
+        
+        if time_granted_seconds > 0:
+            # Calculate expiry date
+            from datetime import datetime, timedelta
+            expiry_date = datetime.now() + timedelta(seconds=time_granted_seconds)
+            db.update_user_time_access(user_id, expiry_date)
+            logger.info(f"✅ Granted time access to user {user_id} until {expiry_date}")
+        
+        logger.info(f"✅ Successfully processed checkout for user {user_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error processing checkout completed: {e}")
+        return False
+
+
 try:
     # Try to list a small number of products to test connection
     stripe.Product.list(limit=1)
