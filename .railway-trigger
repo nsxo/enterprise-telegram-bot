@@ -1,10 +1,10 @@
 🚀 Manual Deployment Trigger
 =========================
-Timestamp: 2025-01-27T15:30:00Z
-Commit: ff9f1e0
+Timestamp: 2025-01-27T16:00:00Z
+Commit: 47f8feb
 Branch: main
 Deployed by: nsxo
 Host: MacBookPro
 
 This file triggers Railway to deploy the latest code.
-Plugin architecture refactor completed.
+Bot factory fix applied - removed disable_web_page_preview parameter.
