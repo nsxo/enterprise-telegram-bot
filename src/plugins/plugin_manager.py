@@ -100,11 +100,21 @@ class PluginManager:
             module_name = python_file.stem
             try:
                 # Import the module using the correct module path
-                # Convert absolute path to module path
-                relative_path = python_file.relative_to(
-                    Path(__file__).parent.parent
-                )
-                module_path = str(relative_path).replace('/', '.').replace('\\', '.')
+                # Construct the proper module path with src prefix
+                if "admin_plugins" in str(python_file):
+                    module_path = f"src.plugins.admin_plugins.{module_name}"
+                elif "user_plugins" in str(python_file):
+                    module_path = f"src.plugins.user_plugins.{module_name}"
+                elif "core_plugins" in str(python_file):
+                    module_path = f"src.plugins.core_plugins.{module_name}"
+                else:
+                    # Fallback for other plugin directories
+                    relative_path = python_file.relative_to(
+                        Path(__file__).parent.parent.parent
+                    )
+                    module_path = str(relative_path).replace('/', '.').replace('\\', '.')
+                    module_path = module_path.replace('.py', '')
+                
                 module = importlib.import_module(module_path)
 
                 # Find plugin classes in the module
