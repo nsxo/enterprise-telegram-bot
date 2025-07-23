@@ -21,9 +21,15 @@ from telegram import (
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
+from enum import Enum
 
 from src import database as db
 from src.config import ADMIN_USER_ID, ADMIN_GROUP_ID, CREDIT_WARNING_THRESHOLD
+from src.services.error_service import (
+    handle_error,
+    get_user_friendly_error_message,
+    DatabaseError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,20 +42,26 @@ class BotError(Exception):
 
 # Rate limiting storage
 class RateLimiter:
-    """Rate limiter for Telegram API calls."""
+    """
+    Optimized rate limiter for Telegram API calls.
+    Uses efficient cleanup strategies to handle high-traffic scenarios.
+    """
     
     def __init__(self):
         self.global_calls = deque()  # Global rate limit tracking
         self.chat_calls = defaultdict(deque)  # Per-chat rate limit tracking
         self.global_limit = 30  # 30 messages per second globally
         self.chat_limit = 1    # 1 message per second per chat
+        self.last_cleanup = 0  # Track last cleanup time to avoid excessive calls
         
     async def wait_if_needed(self, chat_id: Optional[int] = None) -> None:
         """Wait if rate limits would be exceeded."""
         current_time = time.time()
         
-        # Clean old entries (older than 1 second)
-        self._clean_old_entries(current_time)
+        # Clean old entries periodically (not on every call)
+        if current_time - self.last_cleanup > 0.1:  # Cleanup every 100ms max
+            self._clean_old_entries(current_time)
+            self.last_cleanup = current_time
         
         # Check global rate limit
         if len(self.global_calls) >= self.global_limit:
@@ -76,22 +88,52 @@ class RateLimiter:
             self.chat_calls[chat_id].append(current_time)
     
     def _clean_old_entries(self, current_time: float) -> None:
-        """Remove entries older than 1 second."""
+        """
+        Efficiently remove entries older than 1 second.
+        Optimized for high-traffic scenarios.
+        """
         cutoff = current_time - 1.0
         
-        # Clean global calls
+        # Clean global calls efficiently
         while self.global_calls and self.global_calls[0] < cutoff:
             self.global_calls.popleft()
         
-        # Clean per-chat calls
-        for chat_id in list(self.chat_calls.keys()):
-            chat_calls = self.chat_calls[chat_id]
+        # Clean per-chat calls with batch processing
+        chats_to_remove = []
+        for chat_id, chat_calls in self.chat_calls.items():
+            # Fast cleanup: remove multiple entries at once if they're old
+            original_length = len(chat_calls)
             while chat_calls and chat_calls[0] < cutoff:
                 chat_calls.popleft()
             
-            # Remove empty chat entries
+            # Track empty chats for removal
             if not chat_calls:
-                del self.chat_calls[chat_id]
+                chats_to_remove.append(chat_id)
+            elif len(chat_calls) < original_length:
+                # Log cleanup efficiency for monitoring
+                cleaned = original_length - len(chat_calls)
+                if cleaned > 5:  # Only log significant cleanups
+                    logger.debug(f"Cleaned {cleaned} old entries for chat {chat_id}")
+        
+        # Remove empty chat entries in batch
+        for chat_id in chats_to_remove:
+            del self.chat_calls[chat_id]
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """
+        Get rate limiter statistics for monitoring.
+        
+        Returns:
+            Dictionary with current rate limiter statistics
+        """
+        return {
+            "global_calls_count": len(self.global_calls),
+            "active_chats": len(self.chat_calls),
+            "total_chat_calls": sum(len(calls) for calls in self.chat_calls.values()),
+            "global_limit": self.global_limit,
+            "chat_limit": self.chat_limit,
+            "last_cleanup": self.last_cleanup
+        }
 
 
 # Global rate limiter instance
@@ -157,69 +199,128 @@ async def require_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> b
     return True
 
 
-def create_progress_bar(
-    current_value: int, max_value: int = 100, length: int = 10
+class ProgressBarStyle(Enum):
+    """Progress bar display styles."""
+    BASIC = "basic"
+    CREDITS = "credits"
+    TIME = "time"
+    GENERAL = "general"
+
+
+def create_unified_progress_bar(
+    current: int,
+    max_value: int = None,
+    style: ProgressBarStyle = ProgressBarStyle.BASIC,
+    length: int = 10,
+    show_percentage: bool = True,
+    show_status_emoji: bool = True
 ) -> str:
     """
-    Generate a text-based progress bar.
+    Unified progress bar creation with multiple styles and options.
+    Replaces create_progress_bar, create_enhanced_progress_bar functions.
 
     Args:
-        current_value: Current credit count
-        max_value: Maximum value for 100% (default 100)
-        length: Number of characters for the bar (default 10)
+        current: Current value
+        max_value: Maximum value for 100% (auto-detected if None)
+        style: Progress bar style (ProgressBarStyle enum)
+        length: Length of the progress bar (default 10)
+        show_percentage: Whether to show percentage (default True)
+        show_status_emoji: Whether to show status emoji (default True)
 
     Returns:
         Formatted progress bar string
     """
-    # Calculate percentage, capping at 100%
-    percentage = min(100, (current_value / max_value) * 100)
+    # Auto-detect max_value for credits style
+    if max_value is None:
+        if style == ProgressBarStyle.CREDITS:
+            max_value = int(db.get_bot_setting("progress_bar_max_credits") or "100")
+        else:
+            max_value = 100
 
-    # Calculate filled and empty characters
+    # Calculate percentage and filled length
+    percentage = min(100, (current / max_value) * 100)
     filled_length = int(length * percentage / 100)
-    filled_chars = "█" * filled_length
-    empty_chars = "░" * (length - filled_length)
 
-    return f"[{filled_chars}{empty_chars}] {percentage:.0f}%"
+    # Create progress bar based on style
+    if style == ProgressBarStyle.BASIC:
+        filled_chars = "█" * filled_length
+        empty_chars = "░" * (length - filled_length)
+        bar = f"[{filled_chars}{empty_chars}]"
+        status_emoji = ""
+
+    elif style == ProgressBarStyle.CREDITS:
+        if percentage >= 80:
+            bar_fill = "🟢" * filled_length + "⚪" * (length - filled_length)
+            status_emoji = "💚" if show_status_emoji else ""
+        elif percentage >= 40:
+            bar_fill = "🟡" * filled_length + "⚪" * (length - filled_length)
+            status_emoji = "💛" if show_status_emoji else ""
+        else:
+            bar_fill = "🔴" * filled_length + "⚪" * (length - filled_length)
+            status_emoji = "❤️" if show_status_emoji else ""
+        bar = bar_fill
+
+    elif style == ProgressBarStyle.TIME:
+        bar_fill = "⏰" * filled_length + "⏳" * (length - filled_length)
+        status_emoji = "🕐" if show_status_emoji else ""
+        bar = bar_fill
+
+    else:  # GENERAL
+        bar_fill = "⭐" * filled_length + "⚪" * (length - filled_length)
+        status_emoji = "✨" if show_status_emoji else ""
+        bar = bar_fill
+
+    # Format final output
+    result_parts = []
+    if status_emoji:
+        result_parts.append(status_emoji)
+    result_parts.append(bar)
+    if show_percentage:
+        result_parts.append(f"{percentage:.0f}%")
+
+    return " ".join(result_parts)
+
+
+def create_progress_bar(
+    current_value: int, max_value: int = 100, length: int = 10
+) -> str:
+    """
+    DEPRECATED: Use create_unified_progress_bar instead.
+    Backward compatibility wrapper for create_progress_bar.
+    """
+    return create_unified_progress_bar(
+        current=current_value,
+        max_value=max_value,
+        style=ProgressBarStyle.BASIC,
+        length=length,
+        show_percentage=True,
+        show_status_emoji=False
+    )
 
 
 def create_enhanced_progress_bar(
     current: int, max_val: int = None, style: str = "credits"
 ) -> str:
     """
-    Create enhanced visual progress bars with status indicators.
-
-    Args:
-        current: Current value (credits, etc.)
-        max_val: Maximum value for 100% (from settings if None)
-        style: Style of progress bar ('credits', 'time')
-
-    Returns:
-        Enhanced progress bar with status indicators
+    DEPRECATED: Use create_unified_progress_bar instead.
+    Backward compatibility wrapper for create_enhanced_progress_bar.
     """
-    if max_val is None:
-        max_val = int(db.get_bot_setting("progress_bar_max_credits") or "100")
-
-    percentage = min(100, (current / max_val) * 100)
-    filled = int(10 * percentage / 100)
-
-    if style == "credits":
-        if percentage >= 80:
-            bar_fill = "🟢" * filled + "⚪" * (10 - filled)
-            status_emoji = "💚"
-        elif percentage >= 40:
-            bar_fill = "🟡" * filled + "⚪" * (10 - filled)
-            status_emoji = "💛"
-        else:
-            bar_fill = "🔴" * filled + "⚪" * (10 - filled)
-            status_emoji = "❤️"
-    elif style == "time":
-        bar_fill = "⏰" * filled + "⏳" * (10 - filled)
-        status_emoji = "🕐"
-    else:
-        bar_fill = "⭐" * filled + "⚪" * (10 - filled)
-        status_emoji = "✨"
-
-    return f"{status_emoji} {bar_fill} {percentage:.0f}%"
+    style_map = {
+        "credits": ProgressBarStyle.CREDITS,
+        "time": ProgressBarStyle.TIME,
+        "general": ProgressBarStyle.GENERAL
+    }
+    
+    progress_style = style_map.get(style, ProgressBarStyle.CREDITS)
+    
+    return create_unified_progress_bar(
+        current=current,
+        max_value=max_val,
+        style=progress_style,
+        length=10,
+        show_percentage=True,
+        show_status_emoji=True
+    )
 
 
 def create_balance_card(user_data: Dict[str, Any]) -> str:
@@ -250,7 +351,7 @@ def create_balance_card(user_data: Dict[str, Any]) -> str:
         status = "🔴 Critical"
         tip = "⚠️ Add credits now to continue chatting!"
 
-    progress_bar = create_enhanced_progress_bar(credits, style="credits")
+    progress_bar = create_unified_progress_bar(credits, style=ProgressBarStyle.CREDITS)
 
     return f"""
 🏦 **Your Account Dashboard**
@@ -544,3 +645,59 @@ async def should_show_credit_warning(user_id: int) -> bool:
         return False
 
     return user_data.get("message_credits", 0) <= CREDIT_WARNING_THRESHOLD
+
+
+async def send_auto_recharge_prompt(user_id: int, product_id: int, bot_instance=None):
+    """
+    Sends a message to the user after their first purchase,
+    prompting them to enable auto-recharge.
+    
+    Args:
+        user_id: User's Telegram ID
+        product_id: Product ID for auto-recharge
+        bot_instance: Bot instance (required to avoid circular imports)
+    """
+    from src import database as db
+
+    if not bot_instance:
+        logger.error(f"Cannot send auto-recharge prompt to user {user_id}: No bot instance provided")
+        return
+
+    product = db.get_product_by_id(product_id)
+    if not product:
+        logger.warning(f"Cannot send auto-recharge prompt: Product {product_id} not found")
+        return
+
+    text = f"""
+🎉 Thank you for your purchase of **{product['name']}**!
+
+To make things easier next time, would you like to enable **Auto-Recharge**?
+
+When your balance drops below 10 credits, we'll automatically top you up with this same package. You can change this or turn it off at any time from the /billing menu.
+    """
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "✅ Yes, enable Auto-Recharge",
+                callback_data=("autorecharge_enable", product_id),
+            )
+        ],
+        [InlineKeyboardButton("❌ No, thanks", callback_data=("autorecharge_decline",))],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    try:
+        await bot_instance.send_message(
+            chat_id=user_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        logger.info(f"Sent auto-recharge prompt to user {user_id}")
+    except Exception as e:
+        logger.error(f"Failed to send auto-recharge prompt to {user_id}: {e}")
+
+
+def get_user_dashboard_url(user_id: int) -> str:
+    # In a real app, this would point to a web dashboard
+    return f"https://yourapp.com/dashboard/{user_id}"

@@ -6,262 +6,235 @@ product catalog, checkout flow, Stripe integration, and billing management.
 """
 
 import logging
-from typing import Dict, Any
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, Application
-from telegram.constants import ParseMode
 
-from src.plugins.base_plugin import BasePlugin, PluginMetadata
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ParseMode,
+)
+from telegram.ext import (
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    ConversationHandler,
+)
+
+from src.plugins.base_plugin import BasePlugin
 from src import database as db
 from src import stripe_utils
 
 logger = logging.getLogger(__name__)
 
+# Conversation states
+SELECTING_AUTO_RECHARGE_PRODUCT = range(1)
+
 
 class PurchasePlugin(BasePlugin):
-    """Plugin for user purchase and billing functionality."""
+    """
+    Handles all purchasing, billing, and auto-recharge functionality.
+    """
 
-    @property
-    def metadata(self) -> PluginMetadata:
-        return PluginMetadata(
-            name="Purchase",
-            version="1.0.0",
-            description="User product catalog, checkout, and billing",
-            dependencies=[],
-        )
+    def __init__(self):
+        super().__init__()
+        self.name = "Purchase"
+        self.description = "Handles product purchases and billing management."
+        self.version = "2.0.0"
+        self.author = "Your Name"
 
-    async def initialize(self, config: Dict[str, Any] = None) -> bool:
-        """Initialize the purchase plugin."""
-        try:
-            logger.info("Initializing Purchase Plugin...")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to initialize Purchase Plugin: {e}")
-            return False
-
-    def register_handlers(self, application: Application) -> None:
-        """Register all purchase handlers."""
-        application.add_handler(CommandHandler("buy", self.buy_command))
-        application.add_handler(CommandHandler("buy10", self.buy10_command))
-        application.add_handler(CommandHandler("buy25", self.buy25_command))
-        application.add_handler(CommandHandler("buy50", self.buy50_command))
+    def register_handlers(self, application) -> None:
+        """Register all handlers for this plugin."""
+        # Main Commands
+        application.add_handler(CommandHandler("buy", self.show_products_command))
         application.add_handler(CommandHandler("billing", self.billing_command))
+
+        # Quick Buy Commands
         application.add_handler(
-            CallbackQueryHandler(self.show_products_callback, pattern="^show_products$")
+            CommandHandler("buy10", lambda u, c: self.process_quick_buy_command(u, c, 10))
         )
         application.add_handler(
-            CallbackQueryHandler(self.process_buy_callback, pattern="^process_buy_.*")
+            CommandHandler("buy25", lambda u, c: self.process_quick_buy_command(u, c, 25))
         )
         application.add_handler(
-            CallbackQueryHandler(self.quick_buy_callback, pattern="^quick_buy_.*")
+            CommandHandler("buy50", lambda u, c: self.process_quick_buy_command(u, c, 50))
         )
+
+        # Auto-recharge prompt handlers
         application.add_handler(
-            CallbackQueryHandler(self.show_time_options, pattern="^show_time$")
+            CallbackQueryHandler(
+                self.handle_auto_recharge_prompt, pattern=("autorecharge_enable",)
+            )
         )
         application.add_handler(
             CallbackQueryHandler(
-                self.process_time_buy_callback, pattern="^buy_time_.*"
+                self.handle_auto_recharge_prompt, pattern=("autorecharge_decline",)
             )
         )
-        # Add auto-recharge handlers
+
+        # Main callback for product purchase
         application.add_handler(
-            CallbackQueryHandler(self.setup_auto_recharge_callback, pattern="^setup_auto_recharge$")
-        )
-        application.add_handler(
-            CallbackQueryHandler(self.toggle_auto_recharge_callback, pattern="^toggle_auto_recharge$")
-        )
-        application.add_handler(
-            CallbackQueryHandler(self.auto_recharge_product_callback, pattern="^auto_recharge_product_.*")
+            CallbackQueryHandler(self.process_buy_callback, pattern=r"^buy_product_")
         )
 
-    def get_commands(self) -> Dict[str, str]:
-        """Get commands provided by this plugin."""
-        return {
-            "buy": "Browse and buy credits or time-based access",
-            "buy10": "Quick buy 10 credits",
-            "buy25": "Quick buy 25 credits",
-            "buy50": "Quick buy 50 credits",
-            "billing": "Manage your billing and payment methods",
-        }
-
-    async def buy_command(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        """Handle the /buy command."""
-        await self.show_products_callback(update, context)
-
-    async def buy10_command(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        """Handle /buy10 quick buy command."""
-        await self.process_quick_buy_command(update, context, 10)
-
-    async def buy25_command(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        """Handle /buy25 quick buy command."""
-        await self.process_quick_buy_command(update, context, 25)
-
-    async def buy50_command(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        """Handle /buy50 quick buy command."""
-        await self.process_quick_buy_command(update, context, 50)
-
-    async def billing_command(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        """Handle /billing command to redirect to Stripe portal."""
-        user = update.effective_user
-
-        try:
-            # Get user data from database to find Stripe customer ID
-            user_data = db.get_user(user.id)
-            if not user_data:
-                await update.message.reply_text(
-                    "❌ User not found. Please contact support."
-                )
-                return
-
-            stripe_customer_id = user_data.get("stripe_customer_id")
-            if not stripe_customer_id:
-                await update.message.reply_text(
-                    "❌ No billing account found. Please make a purchase first to set up billing."
-                )
-                return
-
-            portal_url = stripe_utils.create_billing_portal_session(stripe_customer_id)
-
-            if portal_url:
-                text = """
-💳 **Manage Your Billing**
-
-Click the button below to manage your payment methods, view invoices,
-and update your subscription details securely in our billing portal.
-                """
-
-                keyboard = [
-                    [InlineKeyboardButton("🔐 Open Billing Portal", url=portal_url)]
+        # Billing and auto-recharge management conversation
+        conv_handler = ConversationHandler(
+            entry_points=[
+                CallbackQueryHandler(
+                    self.setup_auto_recharge_callback,
+                    pattern=r"^autorecharge_setup",
+                ),
+                CallbackQueryHandler(
+                    self.toggle_auto_recharge_callback,
+                    pattern=r"^autorecharge_toggle",
+                ),
+                CallbackQueryHandler(
+                    self.billing_command, pattern=r"^return_billing"
+                ),
+            ],
+            states={
+                SELECTING_AUTO_RECHARGE_PRODUCT: [
+                    CallbackQueryHandler(
+                        self.auto_recharge_product_callback,
+                        pattern=r"^autorecharge_product_",
+                    )
                 ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-
-                await update.message.reply_text(
-                    text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
-                )
-
-            else:
-                await update.message.reply_text(
-                    "❌ Could not create a billing session. Please try again later."
-                )
-
-        except Exception as e:
-            logger.error(f"Error creating billing portal for user {user.id}: {e}")
-            await update.message.reply_text(
-                "❌ An error occurred. Please try again later."
+            },
+            fallbacks=[
+                CallbackQueryHandler(self.cancel_callback, pattern=r"^cancel"),
+                CommandHandler("billing", self.billing_command),
+            ],
+            map_to_parent={-1: -1},
+        )
+        application.add_handler(conv_handler)
+        application.add_handler(
+            CallbackQueryHandler(
+                self.view_billing_callback, pattern=r"^view_billing$"
             )
+        )
+
+
+    async def show_products_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        await self.show_products_callback(update, context)
 
     async def show_products_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Show available products to the user."""
+        """Display active products to the user."""
         query = update.callback_query
         if query:
             await query.answer()
 
         try:
-            products = db.get_active_products()
+            credit_products = db.get_products_by_type("credits")
+            time_products = db.get_products_by_type("time")
 
-            if not products:
-                text = "😔 No products available at this time. Please check back later."
-                keyboard = None
-            else:
-                text = """
-🛒 **Purchase Options**
+            text = "🛍️ **Product Catalog**\n\n"
+            keyboard = []
 
-Choose from our available credit packs and time-based access:
-
-**Credit Packs:**
-                """
-
-                credit_buttons = []
-                for p in products:
-                    if p.get("product_type") == "credits":
-                        price_in_dollars = p.get('price_usd_cents', 0) / 100
-                        credit_buttons.append(
+            if credit_products:
+                text += "C R E D I T S\n"
+                for p in credit_products:
+                    button_text = f"{p['name']} - ${p['price_usd_cents']/100:.2f}"
+                    keyboard.append(
+                        [
                             InlineKeyboardButton(
-                                f"{p.get('name', 'N/A')} - ${price_in_dollars:.2f}",
-                                callback_data=f"process_buy_{p.get('id')}",
+                                button_text,
+                                callback_data=f"buy_product_{p['id']}",
                             )
-                        )
-
-                # Arrange buttons in rows of 2
-                keyboard = [
-                    credit_buttons[i : i + 2] for i in range(0, len(credit_buttons), 2)
-                ]
-
-                text += "\n\n**Time-Based Access:**\n"
-
-                time_buttons = [
-                    InlineKeyboardButton(
-                        "⏳ View Time Options", callback_data="show_time"
+                        ]
                     )
-                ]
-                keyboard.append(time_buttons)
+            if time_products:
+                text += "\nT I M E - B A S E D   A C C E S S\n"
+                for p in time_products:
+                    button_text = f"{p['name']} - ${p['price_usd_cents']/100:.2f}"
+                    keyboard.append(
+                        [
+                            InlineKeyboardButton(
+                                button_text,
+                                callback_data=f"buy_product_{p['id']}",
+                            )
+                        ]
+                    )
 
-            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+            if not keyboard:
+                text = "❌ No products are currently available. Please check back later."
 
-            if query:
-                await query.edit_message_text(
-                    text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
-                )
-            else:
-                await update.message.reply_text(
-                    text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
-                )
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            edit_or_reply = (
+                query.edit_message_text if query else update.message.reply_text
+            )
+            await edit_or_reply(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
         except Exception as e:
             logger.error(f"Error in show_products_callback: {e}")
-            error_text = "❌ Error loading products."
+            await handle_error(update, context, "Error loading products.")
 
-            if query:
-                await query.edit_message_text(error_text)
-            else:
-                await update.message.reply_text(error_text)
-
-    async def process_quick_buy_command(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE, amount: int
-    ) -> None:
-        """Process a quick buy command for a specified credit amount."""
-        user = update.effective_user
-        
-        # Get the product ID from the database based on the credit amount
-        product = db.get_product_by_credit_amount(amount)
-        
-        if not product:
-            await update.message.reply_text(f"❌ No product found for {amount} credits.")
-            return
-            
-        await self._create_checkout_session(update, context, user, product["id"])
-
-    async def process_buy_callback(
+    async def billing_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Process a buy callback for a specific product ID."""
+        """Handle /billing command to show the billing management menu."""
         query = update.callback_query
-        await query.answer()
+        if query:
+            await query.answer()
         user = update.effective_user
+        user_data = db.get_user(user.id)
 
-        try:
-            product_id = int(query.data.split("_")[-1])
-            await self._create_checkout_session(
-                update, context, user, product_id, is_callback=True
+        if not user_data:
+            await handle_error(update, context, "User not found.")
+            return
+
+        stripe_customer_id = user_data.get("stripe_customer_id")
+        auto_recharge_enabled = user_data.get("auto_recharge_enabled", False)
+        auto_recharge_product_id = user_data.get("auto_recharge_product_id")
+
+        text = "💳 **Billing & Auto-Recharge**\n\n"
+        keyboard = []
+
+        if auto_recharge_enabled and auto_recharge_product_id:
+            product = db.get_product_by_id(auto_recharge_product_id)
+            text += (
+                f"✅ Auto-Recharge is **ON**.\n"
+                "We will automatically purchase "
+                f"**{product['name']}** for you when your balance drops below "
+                f"**{user_data.get('auto_recharge_threshold', 10)}** credits.\n"
+            )
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "❌ Disable Auto-Recharge",
+                        callback_data="autorecharge_toggle",
+                    )
+                ]
+            )
+        else:
+            text += (
+                "☑️ Auto-Recharge is **OFF**.\n"
+                "Enable it to automatically top up your credits when you're "
+                "running low. Never get interrupted again!\n"
+            )
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "✅ Enable Auto-Recharge",
+                        callback_data="autorecharge_setup",
+                    )
+                ]
             )
 
-        except (ValueError, IndexError):
-            await query.edit_message_text("❌ Invalid product selection.")
-        except Exception as e:
-            logger.error(f"Error processing buy callback for user {user.id}: {e}")
-            await query.edit_message_text("❌ Error creating checkout session.")
+        text += "\nManage your saved payment methods or view invoices on Stripe."
+        if stripe_customer_id:
+            portal_url = stripe_utils.create_billing_portal_session(stripe_customer_id)
+            keyboard.append([
+                InlineKeyboardButton("🔐 Open Stripe Billing Portal", url=portal_url)
+            ])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        edit_or_reply = (
+            query.edit_message_text if query else update.message.reply_text
+        )
+        await edit_or_reply(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
     async def _create_checkout_session(
         self,
@@ -271,119 +244,205 @@ Choose from our available credit packs and time-based access:
         product_id: int,
         is_callback: bool = False,
     ) -> None:
-        """Create and send a Stripe checkout session URL."""
+        """Create and send an enhanced Stripe checkout session message."""
         try:
             product = db.get_product_by_id(product_id)
             if not product:
-                error_msg = "❌ Product not found."
-                if is_callback and update.callback_query:
-                    await update.callback_query.edit_message_text(error_msg)
-                else:
-                    await update.message.reply_text(error_msg)
+                await handle_error(update, context, "Product not found.")
                 return
+
+            user_data = db.get_user(user.id)
+            has_payment_method = bool(user_data.get("stripe_customer_id"))
+            is_first_purchase = not db.has_user_made_purchases(user.id)
 
             checkout_url = stripe_utils.create_checkout_session(
                 user.id, product["stripe_price_id"]
             )
 
             if checkout_url:
-                text = """
-💳 **Complete Your Purchase**
+                text = f"💳 **Complete Your Purchase - {product['name']}**\n\n"
+                if has_payment_method:
+                    text += "⚡ Using your saved payment method for a faster checkout.\n\n"
+                else:
+                    text += "💾 Your payment method will be saved for faster future purchases.\n\n"
 
-Click the button below to complete your purchase securely.
-Your credits will be added automatically after payment.
-                """
+                text += (
+                    f"📦 **Product Details:**\n"
+                    f"💰 **Price:** ${product['price_usd_cents']/100:.2f}\n"
+                    f"🎯 **Credits:** {product.get('amount', 'N/A')} credits\n"
+                    f"📝 **Description:** {product['description']}\n\n"
+                    f"✅ **What happens next:**\n"
+                    "• Secure payment processing via Stripe\n"
+                    "• Credits added instantly to your account\n"
+                    "• Email receipt sent automatically\n"
+                )
+                if is_first_purchase:
+                    text += (
+                        "🎉 **First purchase bonus:** You can set up auto-recharge "
+                        "after this purchase!\n"
+                    )
 
                 keyboard = [[InlineKeyboardButton("🔒 Pay Now", url=checkout_url)]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
 
-                # Edit message if from callback, else reply
-                if is_callback and update.callback_query:
-                    await update.callback_query.edit_message_text(
-                        text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
-                    await update.message.reply_text(
-                        text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
-                    )
+                edit_or_reply = (
+                    update.callback_query.edit_message_text
+                    if is_callback and update.callback_query
+                    else update.message.reply_text
+                )
+                await edit_or_reply(
+                    text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
+                )
             else:
-                error_msg = "❌ Could not create a checkout session."
-                if is_callback and update.callback_query:
-                    await update.callback_query.edit_message_text(error_msg)
-                else:
-                    await update.message.reply_text(error_msg)
-
+                await handle_error(update, context, "Could not create a checkout session.")
         except Exception as e:
             logger.error(f"Error creating checkout session for user {user.id}: {e}")
-            error_msg = "❌ An error occurred. Please try again later."
-            if is_callback and update.callback_query:
-                await update.callback_query.edit_message_text(error_msg)
-            else:
-                await update.message.reply_text(error_msg)
+            await handle_error(update, context, "An error occurred while creating the checkout session.")
 
-    async def quick_buy_callback(
+
+    async def handle_auto_recharge_prompt(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Handle quick buy callbacks."""
+        """Handles the user's response to the initial auto-recharge prompt."""
         query = update.callback_query
         await query.answer()
+        action = query.data[0]
 
-        amount_map = {"quick_buy_10": 10, "quick_buy_25": 25, "quick_buy_50": 50}
-        amount = amount_map.get(query.data)
+        if action == "autorecharge_enable":
+            product_id = query.data[1]
+            db.enable_auto_recharge(update.effective_user.id, product_id)
+            await query.edit_message_text(
+                "✅ **Auto-Recharge Enabled!**\n\n"
+                "You're all set! We'll top you up automatically. You can manage "
+                "this anytime via /billing."
+            )
+        elif action == "autorecharge_decline":
+            await query.edit_message_text(
+                "👍 **Got it.**\n\nYou can enable auto-recharge anytime from "
+                "the /billing menu."
+            )
 
-        if amount:
-            await self.process_quick_buy_command(update, context, amount)
-
-    async def show_time_options(
+    async def setup_auto_recharge_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        """Show time-based purchase options."""
+    ) -> int:
+        """Starts the process of setting up auto-recharge."""
         query = update.callback_query
         await query.answer()
         
-        time_products = db.get_products_by_type('time')
-        
-        text = "⏳ **Time-Based Access**\n\nEnjoy unlimited conversations for a set period:"
-        
+        products = db.get_products_by_type("credits")
+        if not products:
+            await query.edit_message_text("❌ No credit products available for auto-recharge.")
+            return ConversationHandler.END
+
+        text = (
+            "**Setup Auto-Recharge**\n\n"
+            "Please select a credit package to automatically purchase when "
+            "your balance runs low."
+        )
         keyboard = []
-        for p in time_products:
-            price_in_dollars = p.get("price_usd_cents", 0) / 100
+        for p in products:
+            button_text = f"{p['name']} (${p['price_usd_cents']/100:.2f})"
             keyboard.append(
                 [
                     InlineKeyboardButton(
-                        f"{p['name']} - ${price_in_dollars:.2f}",
-                        callback_data=f"buy_time_{p['id']}",
+                        button_text,
+                        callback_data=f"autorecharge_product_{p['id']}",
                     )
                 ]
             )
-            
-        keyboard.append(
-            [InlineKeyboardButton("🔙 Back to Credits", callback_data="show_products")]
-        )
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
+        keyboard.append([InlineKeyboardButton("🔙 Cancel", callback_data="cancel")])
+
         await query.edit_message_text(
             text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN,
         )
+        return SELECTING_AUTO_RECHARGE_PRODUCT
 
-    async def process_time_buy_callback(
+    async def auto_recharge_product_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        """Process a buy callback for a time-based product."""
+    ) -> int:
+        """Handles the user's product selection for auto-recharge."""
+        query = update.callback_query
+        await query.answer()
+        product_id = int(query.data.split("_")[-1])
+        
+        db.enable_auto_recharge(update.effective_user.id, product_id)
+
+        await query.edit_message_text(
+            "✅ **Auto-Recharge Enabled!**\n\n"
+            "You're all set! We'll top you up automatically. You can manage "
+            "this anytime via /billing."
+        )
+        return ConversationHandler.END
+        
+    async def toggle_auto_recharge_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Toggles auto-recharge on or off."""
         query = update.callback_query
         await query.answer()
         user = update.effective_user
+        user_data = db.get_user(user.id)
+        
+        if user_data.get("auto_recharge_enabled"):
+            db.disable_auto_recharge(user.id)
+            await query.edit_message_text("❌ Auto-Recharge has been **disabled**.")
+        else:
+            # This path should ideally not be hit if the button is only for disabling
+            await self.setup_auto_recharge_callback(update, context)
+            return SELECTING_AUTO_RECHARGE_PRODUCT
 
+        # Show the updated billing menu
+        await self.billing_command(update, context)
+        return ConversationHandler.END
+
+    async def cancel_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> int:
+        """Cancels the current conversation and shows the billing menu."""
+        query = update.callback_query
+        await query.answer()
+        await self.billing_command(update, context)
+        return ConversationHandler.END
+
+    async def view_billing_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handler to simply show the billing menu, useful for returns."""
+        await self.billing_command(update, context)
+
+    # These methods remain mostly the same, but now call the new _create_checkout_session
+    async def process_quick_buy_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE, amount: int
+    ) -> None:
+        user = update.effective_user
+        product = db.get_product_by_credit_amount(amount)
+        if not product:
+            await handle_error(
+                update, context, f"No product found for {amount} credits."
+            )
+            return
+        await self._create_checkout_session(update, context, user, product["id"])
+
+    async def process_buy_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        query = update.callback_query
+        await query.answer()
+        user = update.effective_user
         try:
             product_id = int(query.data.split("_")[-1])
             await self._create_checkout_session(
                 update, context, user, product_id, is_callback=True
             )
-
         except (ValueError, IndexError):
-            await query.edit_message_text("❌ Invalid product selection.")
+            await handle_error(update, context, "Invalid product selection.")
         except Exception as e:
-            logger.error(f"Error processing time buy for user {user.id}: {e}")
-            await query.edit_message_text("❌ Error creating checkout session.")
+            logger.error(f"Error processing buy callback for user {user.id}: {e}")
+            await handle_error(update, context, "Error creating checkout session.")
+
+async def handle_error(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str):
+    """A local error handler for cleaner code."""
+    if update.callback_query:
+        await update.callback_query.edit_message_text(f"❌ {message}")
+    else:
+        await update.message.reply_text(f"❌ {message}")

@@ -19,6 +19,7 @@ from src.stripe_utils import (
     StripeError,
 )
 from src.bot_factory import create_application
+from src import database as db
 
 # Graceful shutdown
 import atexit
@@ -33,6 +34,38 @@ class WebhookServerError(Exception):
     """Raised when webhook server operations fail."""
 
     pass
+
+
+class AsyncLoopManager:
+    """
+    Manages async event loops to prevent memory leaks and multiple loop creation.
+    Implements singleton pattern for centralized loop management.
+    """
+    _instance = None
+    _loop = None
+    _thread = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def get_or_create_loop(self):
+        """Get existing loop or create new one if needed."""
+        if self._loop is None or self._loop.is_closed():
+            import asyncio
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+        return self._loop
+    
+    def close_loop(self):
+        """Safely close the managed loop."""
+        if self._loop and not self._loop.is_closed():
+            self._loop.close()
+            self._loop = None
+
+# Global loop manager instance
+loop_manager = AsyncLoopManager()
 
 
 def create_flask_app() -> Flask:
@@ -80,25 +113,24 @@ def create_flask_app() -> Flask:
     db.apply_database_views_and_functions()
     logger.info("✅ Database views and functions applied")
 
+    # Apply performance indexes migration
+    logger.info("🔧 Applying performance indexes migration...")
+    db.apply_performance_indexes_migration()
+    logger.info("✅ Performance indexes migration completed")
+
     # Ensure we have sample products for testing
     logger.info("🛍️ Ensuring sample products exist...")
-    ensure_sample_products()
+    db.ensure_sample_products()
     logger.info("✅ Product setup completed")
 
     # Initialize and START Telegram application immediately
     global telegram_app
     
-    # Create and initialize the Telegram application asynchronously
+    # Create and initialize the Telegram application using managed loop
     def initialize_telegram_app():
-        import asyncio
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            telegram_app = loop.run_until_complete(create_application())
-            return telegram_app
-        finally:
-            loop.close()
+        loop = loop_manager.get_or_create_loop()
+        telegram_app = loop.run_until_complete(create_application())
+        return telegram_app
     
     telegram_app = initialize_telegram_app()
     start_telegram_application()
@@ -468,45 +500,41 @@ def start_telegram_application() -> None:
     global telegram_app
     if telegram_app:
         try:
-            # Create a background task to process the update queue
+            # Create a background task to process the update queue  
             def run_telegram_app():
                 import asyncio
 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                loop = loop_manager.get_or_create_loop()
+                
+                async def process_updates():
+                    await telegram_app.initialize()
+                    await telegram_app.start()
+                    logger.info(
+                        "✅ Telegram application started and processing updates"
+                    )
+
+                    # Process updates from the queue continuously
+                    while True:
+                        try:
+                            # Get update from queue with timeout
+                            update = await asyncio.wait_for(
+                                telegram_app.update_queue.get(), timeout=1.0
+                            )
+
+                            # Process the update
+                            await telegram_app.process_update(update)
+
+                        except asyncio.TimeoutError:
+                            # No update received, continue loop
+                            continue
+                        except Exception as e:
+                            logger.error(f"Error processing update: {e}")
+                            continue
+
                 try:
-
-                    async def process_updates():
-                        await telegram_app.initialize()
-                        await telegram_app.start()
-                        logger.info(
-                            "✅ Telegram application started and processing updates"
-                        )
-
-                        # Process updates from the queue continuously
-                        while True:
-                            try:
-                                # Get update from queue with timeout
-                                update = await asyncio.wait_for(
-                                    telegram_app.update_queue.get(), timeout=1.0
-                                )
-
-                                # Process the update
-                                await telegram_app.process_update(update)
-
-                            except asyncio.TimeoutError:
-                                # No update received, continue loop
-                                continue
-                            except Exception as e:
-                                logger.error(f"Error processing update: {e}")
-                                continue
-
                     loop.run_until_complete(process_updates())
-
                 except Exception as e:
                     logger.error(f"Telegram app error: {e}")
-                finally:
-                    loop.close()
 
             # Start in background thread
             telegram_thread = threading.Thread(target=run_telegram_app, daemon=True)
@@ -525,18 +553,14 @@ def shutdown_telegram_application() -> None:
     global telegram_app
     if telegram_app:
         try:
-            import asyncio
-
-            # Get current event loop or create new one
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            loop = loop_manager.get_or_create_loop()
 
             # Run async shutdown operations
             loop.run_until_complete(telegram_app.stop())
             loop.run_until_complete(telegram_app.shutdown())
+            
+            # Close the managed loop
+            loop_manager.close_loop()
 
             logger.info("✅ Telegram application shutdown complete")
         except Exception as e:

@@ -198,11 +198,11 @@ def update_user_credits(
 
 
 def update_user_stripe_customer(telegram_id: int, stripe_customer_id: str) -> None:
-    """Link Stripe customer ID to user."""
+    """Store Stripe customer ID for repeat purchases."""
     query = """
         UPDATE users 
         SET stripe_customer_id = %s, updated_at = NOW()
-        WHERE telegram_id = %s;
+        WHERE telegram_id = %s
     """
     execute_query(query, (stripe_customer_id, telegram_id))
 
@@ -450,120 +450,52 @@ def get_user_payment_stats(user_id: int) -> Dict[str, Any]:
 
 
 def enable_auto_recharge(
-    user_id: int, product_id: int, trigger_threshold: int = 5
-) -> bool:
+    user_id: int, product_id: int, threshold: int = 10
+) -> None:
     """
     Enable auto-recharge for a user.
 
     Args:
-        user_id: User's Telegram ID
-        product_id: Product ID to auto-purchase
-        trigger_threshold: Credit level that triggers auto-recharge
-
-    Returns:
-        True if successful
+        user_id: The user's Telegram ID.
+        product_id: The ID of the product to auto-recharge with.
+        threshold: The credit threshold to trigger the recharge.
     """
     query = """
-        UPDATE users 
-        SET 
+        UPDATE users
+        SET
             auto_recharge_enabled = TRUE,
             auto_recharge_product_id = %s,
             auto_recharge_threshold = %s,
             updated_at = NOW()
         WHERE telegram_id = %s
     """
-
-    try:
-        execute_query(query, (product_id, trigger_threshold, user_id))
-        logger.info(
-            f"✅ Enabled auto-recharge for user {user_id}, product {product_id}, threshold {trigger_threshold}"
-        )
-        return True
-    except Exception as e:
-        logger.error(f"Failed to enable auto-recharge for user {user_id}: {e}")
-        return False
+    execute_query(query, (product_id, threshold, user_id))
 
 
-def disable_auto_recharge(user_id: int) -> bool:
-    """
-    Disable auto-recharge for a user.
-
-    Args:
-        user_id: User's Telegram ID
-
-    Returns:
-        True if successful
-    """
+def disable_auto_recharge(user_id: int) -> None:
+    """Disable auto-recharge for a user."""
     query = """
-        UPDATE users 
-        SET 
+        UPDATE users
+        SET
             auto_recharge_enabled = FALSE,
             auto_recharge_product_id = NULL,
-            auto_recharge_threshold = NULL,
             updated_at = NOW()
         WHERE telegram_id = %s
     """
-
-    try:
-        execute_query(query, (user_id,))
-        logger.info(f"✅ Disabled auto-recharge for user {user_id}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to disable auto-recharge for user {user_id}: {e}")
-        return False
+    execute_query(query, (user_id,))
 
 
-def get_users_needing_auto_recharge() -> List[Dict[str, Any]]:
-    """
-    Get users who need auto-recharge triggered.
-
-    Returns:
-        List of users with auto-recharge enabled and low credits
-    """
+def has_user_made_purchases(user_id: int) -> bool:
+    """Check if a user has any completed purchases."""
     query = """
-        SELECT 
-            u.telegram_id,
-            u.message_credits,
-            u.auto_recharge_product_id,
-            u.auto_recharge_threshold,
-            u.stripe_customer_id,
-            p.stripe_price_id,
-            p.name as product_name,
-            p.price_usd_cents
-        FROM users u
-        JOIN products p ON u.auto_recharge_product_id = p.id
-        WHERE 
-            u.auto_recharge_enabled = TRUE
-            AND u.message_credits <= COALESCE(u.auto_recharge_threshold, 5)
-            AND u.stripe_customer_id IS NOT NULL
-            AND p.is_active = TRUE
+        SELECT EXISTS (
+            SELECT 1
+            FROM transactions
+            WHERE user_id = %s AND status = 'completed'
+        ) as has_purchased
     """
-
-    result = execute_query(query, fetch_all=True)
-    return result if result else []
-
-
-def check_failed_payments(user_id: int, days: int = 7) -> int:
-    """
-    Check how many payments have failed for a user in recent days.
-
-    Args:
-        user_id: User's Telegram ID
-        days: Number of days to check back
-
-    Returns:
-        Number of failed payments
-    """
-    query = """
-        SELECT COUNT(*) as failed_count
-        FROM transactions 
-        WHERE user_id = %s 
-        AND status = 'failed'
-        AND created_at >= NOW() - INTERVAL '%s days'
-    """
-
-    result = execute_query(query, (user_id, days), fetch_one=True)
-    return result.get("failed_count", 0) if result else 0
+    result = execute_query(query, (user_id,), fetch_one=True)
+    return result["has_purchased"] if result else False
 
 
 # =============================================================================
@@ -1543,25 +1475,6 @@ def mark_low_credit_warning_shown(telegram_id: int) -> None:
     execute_query(query, (telegram_id,))
 
 
-def has_user_made_purchases(telegram_id: int) -> bool:
-    """
-    Check if user has made any purchases.
-
-    Args:
-        telegram_id: User's Telegram ID
-
-    Returns:
-        True if user has made purchases, False otherwise
-    """
-    query = """
-        SELECT COUNT(*) as purchase_count
-        FROM transactions 
-        WHERE user_id = %s AND status = 'completed'
-    """
-    result = execute_query(query, (telegram_id,), fetch_one=True)
-    return result.get("purchase_count", 0) > 0 if result else False
-
-
 # =============================================================================
 # BROADCAST AND MASS OPERATIONS FUNCTIONS
 # =============================================================================
@@ -2471,3 +2384,389 @@ def apply_conversations_updated_at_fix() -> None:
     except Exception as e:
         logger.error(f"Failed to add updated_at column to conversations: {e}")
         # Don't raise - this is a migration, let the app continue
+
+
+# =============================================================================
+# AUTO-RECHARGE PROMPT MANAGEMENT
+# =============================================================================
+
+
+def store_pending_auto_recharge_prompt(user_id: int, product_id: int) -> None:
+    """
+    Store a pending auto-recharge prompt for a user.
+    This avoids circular imports by deferring the prompt until next interaction.
+
+    Args:
+        user_id: User's Telegram ID
+        product_id: Product ID for auto-recharge setup
+    """
+    query = """
+        INSERT INTO bot_settings (key, value, description, updated_at)
+        VALUES (%s, %s, %s, NOW())
+        ON CONFLICT (key) 
+        DO UPDATE SET 
+            value = EXCLUDED.value,
+            updated_at = EXCLUDED.updated_at
+    """
+    
+    key = f"pending_auto_recharge_prompt_{user_id}"
+    value = str(product_id)
+    description = f"Pending auto-recharge prompt for user {user_id}"
+    
+    execute_query(query, (key, value, description))
+    logger.info(f"Stored pending auto-recharge prompt for user {user_id}")
+
+
+def get_pending_auto_recharge_prompt(user_id: int) -> Optional[int]:
+    """
+    Get and remove pending auto-recharge prompt for a user.
+
+    Args:
+        user_id: User's Telegram ID
+
+    Returns:
+        Product ID if prompt is pending, None otherwise
+    """
+    key = f"pending_auto_recharge_prompt_{user_id}"
+    
+    # Get the value
+    query = "SELECT value FROM bot_settings WHERE key = %s"
+    result = execute_query(query, (key,), fetch_one=True)
+    
+    if result:
+        product_id = int(result["value"])
+        
+        # Remove the setting after retrieving it
+        delete_query = "DELETE FROM bot_settings WHERE key = %s"
+        execute_query(delete_query, (key,))
+        
+        logger.info(f"Retrieved and removed pending auto-recharge prompt for user {user_id}")
+        return product_id
+    
+    return None
+
+# Add new migration function before the end of the file
+def apply_performance_indexes_migration() -> None:
+    """
+    Apply critical performance indexes that are missing.
+    These indexes improve query performance for high-traffic scenarios.
+    """
+    try:
+        logger.info("🔧 Applying performance indexes migration...")
+
+        # Index definitions for better performance
+        indexes = [
+            # High-priority conversation queries
+            {
+                "name": "idx_conversations_unread_priority",
+                "sql": """
+                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_conversations_unread_priority 
+                    ON conversations (admin_group_id, unread_count DESC, last_user_message_at DESC) 
+                    WHERE status = 'open' AND unread_count > 0
+                """,
+                "description": "Optimize unread conversation queries"
+            },
+            
+            # User transaction lookups
+            {
+                "name": "idx_transactions_user_status_date",
+                "sql": """
+                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_user_status_date 
+                    ON transactions (user_id, status, created_at DESC)
+                """,
+                "description": "Optimize user transaction history queries"
+            },
+            
+            # Low credit user identification  
+            {
+                "name": "idx_users_low_credits",
+                "sql": """
+                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_low_credits 
+                    ON users (message_credits, tier_id, auto_recharge_enabled) 
+                    WHERE message_credits <= 10 AND is_banned = false
+                """,
+                "description": "Optimize low credit user queries for auto-recharge"
+            },
+            
+            # Product performance tracking
+            {
+                "name": "idx_transactions_product_completed",
+                "sql": """
+                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_product_completed 
+                    ON transactions (product_id, status, created_at DESC) 
+                    WHERE status = 'completed'
+                """,
+                "description": "Optimize product performance analytics"
+            },
+            
+            # Stripe customer lookups
+            {
+                "name": "idx_users_stripe_customer",
+                "sql": """
+                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_stripe_customer 
+                    ON users (stripe_customer_id) 
+                    WHERE stripe_customer_id IS NOT NULL
+                """,
+                "description": "Optimize Stripe customer ID lookups"
+            },
+            
+            # Message reference performance
+            {
+                "name": "idx_message_references_lookup",
+                "sql": """
+                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_message_references_lookup 
+                    ON message_references (user_id, topic_id, created_at DESC)
+                """,
+                "description": "Optimize message reference lookups"
+            },
+            
+            # Bot settings performance
+            {
+                "name": "idx_bot_settings_key_updated",
+                "sql": """
+                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_bot_settings_key_updated 
+                    ON bot_settings (key, updated_at DESC)
+                """,
+                "description": "Optimize bot settings lookups"
+            }
+        ]
+
+        # Apply each index
+        for index in indexes:
+            try:
+                execute_query(index["sql"])
+                logger.info(f"✅ Created index: {index['name']} - {index['description']}")
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "already exists" in error_msg or "relation" in error_msg:
+                    logger.info(f"✅ Index {index['name']} already exists")
+                else:
+                    logger.warning(f"Could not create index {index['name']}: {e}")
+
+        # Update table statistics for better query planning
+        statistics_tables = [
+            "users", "transactions", "conversations", "products", 
+            "message_references", "bot_settings"
+        ]
+        
+        for table in statistics_tables:
+            try:
+                execute_query(f"ANALYZE {table}")
+                logger.debug(f"Updated statistics for table: {table}")
+            except Exception as e:
+                logger.warning(f"Could not analyze table {table}: {e}")
+
+        logger.info("✅ Performance indexes migration completed")
+
+    except Exception as e:
+        logger.error(f"Failed to apply performance indexes migration: {e}")
+        # Don't raise - this is a migration, let the app continue
+
+# Add optimized analytics function
+def get_optimized_admin_analytics_data() -> Dict[str, Any]:
+    """
+    Optimized version of admin analytics data with combined queries for better performance.
+    Uses CTEs and window functions to reduce database roundtrips.
+
+    Returns:
+        Dictionary with comprehensive analytics metrics
+    """
+    try:
+        # Combined analytics query using CTEs for efficiency
+        combined_analytics_query = """
+            WITH user_metrics AS (
+                SELECT 
+                    COUNT(*) as total_users,
+                    COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days') as new_users_week,
+                    COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days') as new_users_month,
+                    COUNT(*) FILTER (WHERE last_message_at >= NOW() - INTERVAL '7 days') as active_users_week,
+                    COUNT(*) FILTER (WHERE last_message_at >= NOW() - INTERVAL '30 days') as active_users_month,
+                    COALESCE(SUM(message_credits), 0) as total_credits_in_circulation,
+                    COALESCE(AVG(message_credits), 0) as avg_user_credits,
+                    COUNT(*) FILTER (WHERE message_credits <= 5) as users_low_credits,
+                    COUNT(*) FILTER (WHERE message_credits = 0) as users_no_credits
+                FROM users
+            ),
+            transaction_metrics AS (
+                SELECT 
+                    COUNT(*) as total_transactions,
+                    COUNT(*) FILTER (WHERE status = 'completed') as successful_transactions,
+                    COUNT(*) FILTER (WHERE status = 'completed' AND created_at >= NOW() - INTERVAL '7 days') as transactions_week,
+                    COUNT(*) FILTER (WHERE status = 'completed' AND created_at >= NOW() - INTERVAL '30 days') as transactions_month,
+                    COALESCE(SUM(amount_paid_usd_cents) FILTER (WHERE status = 'completed'), 0) as total_revenue_cents,
+                    COALESCE(SUM(amount_paid_usd_cents) FILTER (WHERE status = 'completed' AND created_at >= NOW() - INTERVAL '7 days'), 0) as revenue_week_cents,
+                    COALESCE(SUM(amount_paid_usd_cents) FILTER (WHERE status = 'completed' AND created_at >= NOW() - INTERVAL '30 days'), 0) as revenue_month_cents,
+                    COALESCE(AVG(amount_paid_usd_cents) FILTER (WHERE status = 'completed'), 0) as avg_transaction_value
+                FROM transactions
+            ),
+            conversation_metrics AS (
+                SELECT 
+                    COUNT(*) as total_conversations,
+                    COUNT(*) FILTER (WHERE status = 'open') as active_conversations,
+                    COUNT(*) FILTER (WHERE last_user_message_at >= NOW() - INTERVAL '24 hours') as recent_conversations
+                FROM conversations
+            )
+            SELECT 
+                json_build_object(
+                    'total_users', u.total_users,
+                    'new_users_week', u.new_users_week,
+                    'new_users_month', u.new_users_month,
+                    'active_users_week', u.active_users_week,
+                    'active_users_month', u.active_users_month
+                ) as user_stats,
+                json_build_object(
+                    'total_transactions', t.total_transactions,
+                    'successful_transactions', t.successful_transactions,
+                    'transactions_week', t.transactions_week,
+                    'transactions_month', t.transactions_month,
+                    'total_revenue_cents', t.total_revenue_cents,
+                    'revenue_week_cents', t.revenue_week_cents,
+                    'revenue_month_cents', t.revenue_month_cents,
+                    'avg_transaction_value', t.avg_transaction_value
+                ) as revenue_stats,
+                json_build_object(
+                    'total_credits_in_circulation', u.total_credits_in_circulation,
+                    'avg_user_credits', u.avg_user_credits,
+                    'users_low_credits', u.users_low_credits,
+                    'users_no_credits', u.users_no_credits
+                ) as credit_stats,
+                json_build_object(
+                    'total_conversations', c.total_conversations,
+                    'active_conversations', c.active_conversations,
+                    'recent_conversations', c.recent_conversations
+                ) as conversation_stats
+            FROM user_metrics u, transaction_metrics t, conversation_metrics c
+        """
+        
+        analytics_result = execute_query(combined_analytics_query, fetch_one=True)
+        
+        # Separate optimized product stats query
+        product_stats_query = """
+            SELECT 
+                p.name,
+                p.product_type,
+                COALESCE(t.sales_count, 0) as sales_count,
+                COALESCE(t.revenue_cents, 0) as revenue_cents
+            FROM products p
+            LEFT JOIN (
+                SELECT 
+                    product_id,
+                    COUNT(*) as sales_count,
+                    SUM(amount_paid_usd_cents) as revenue_cents
+                FROM transactions 
+                WHERE status = 'completed'
+                GROUP BY product_id
+            ) t ON p.id = t.product_id
+            WHERE p.is_active = TRUE
+            ORDER BY t.revenue_cents DESC NULLS LAST
+        """
+        
+        product_stats = execute_query(product_stats_query, fetch_all=True)
+
+        return {
+            "user_stats": analytics_result["user_stats"] if analytics_result else {},
+            "revenue_stats": analytics_result["revenue_stats"] if analytics_result else {},
+            "credit_stats": analytics_result["credit_stats"] if analytics_result else {},
+            "conversation_stats": analytics_result["conversation_stats"] if analytics_result else {},
+            "product_stats": product_stats or [],
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting optimized admin analytics data: {e}")
+        # Fallback to original function
+        return get_admin_analytics_data()
+
+
+def get_optimized_user_dashboard_data(user_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Optimized version of user dashboard data with single query instead of multiple lookups.
+    
+    Args:
+        user_id: User's Telegram ID
+        
+    Returns:
+        Complete user dashboard data or None if user not found
+    """
+    query = """
+        SELECT 
+            u.telegram_id,
+            u.username,
+            u.first_name,
+            u.last_name,
+            u.message_credits,
+            u.time_credits_expires_at,
+            u.created_at as user_since,
+            u.auto_recharge_enabled,
+            u.stripe_customer_id,
+            t.name as tier_name,
+            t.permissions as tier_permissions,
+            COALESCE(tr.total_spent_cents, 0) as total_spent_cents,
+            COALESCE(tr.total_purchases, 0) as total_purchases,
+            c.topic_id,
+            c.last_user_message_at,
+            c.status as conversation_status
+        FROM users u
+        LEFT JOIN tiers t ON u.tier_id = t.id
+        LEFT JOIN (
+            SELECT 
+                user_id,
+                SUM(amount_paid_usd_cents) as total_spent_cents,
+                COUNT(*) as total_purchases
+            FROM transactions 
+            WHERE status = 'completed'
+            GROUP BY user_id
+        ) tr ON u.telegram_id = tr.user_id
+        LEFT JOIN conversations c ON u.telegram_id = c.user_id AND c.status = 'open'
+        WHERE u.telegram_id = %s
+    """
+    
+    return execute_query(query, (user_id,), fetch_one=True)
+
+
+def get_optimized_conversation_list(admin_group_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+    """
+    Optimized conversation list with user details in single query.
+    
+    Args:
+        admin_group_id: Admin group ID
+        limit: Maximum conversations to return
+        
+    Returns:
+        List of conversations with user details
+    """
+    query = """
+        SELECT 
+            c.id as conversation_id,
+            c.user_id,
+            c.topic_id,
+            c.status,
+            c.unread_count,
+            c.last_user_message_at,
+            c.created_at as conversation_created_at,
+            u.username,
+            u.first_name,
+            u.last_name,
+            u.message_credits,
+            t.name as tier_name,
+            COALESCE(tr.total_spent_cents, 0) as total_spent_cents,
+            COALESCE(tr.total_purchases, 0) as total_purchases
+        FROM conversations c
+        JOIN users u ON c.user_id = u.telegram_id
+        LEFT JOIN tiers t ON u.tier_id = t.id
+        LEFT JOIN (
+            SELECT 
+                user_id,
+                SUM(amount_paid_usd_cents) as total_spent_cents,
+                COUNT(*) as total_purchases
+            FROM transactions 
+            WHERE status = 'completed'
+            GROUP BY user_id
+        ) tr ON u.telegram_id = tr.user_id
+        WHERE c.admin_group_id = %s
+        ORDER BY 
+            c.unread_count DESC NULLS LAST,
+            c.last_user_message_at DESC NULLS LAST
+        LIMIT %s
+    """
+    
+    return execute_query(query, (admin_group_id, limit), fetch_all=True)

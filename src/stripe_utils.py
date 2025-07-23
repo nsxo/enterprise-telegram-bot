@@ -80,7 +80,19 @@ def create_checkout_session(
         if not customer_id:
             customer_id = create_stripe_customer(user_id, user_data)
 
-        # Log pending transaction
+        # Determine if this is the user's first purchase for the auto-recharge prompt
+        is_first_purchase = not db.has_user_made_purchases(user_id)
+
+        # Pre-calculate credits and time for clarity
+        credits_to_grant = (
+            product.get("amount", 0)
+            if product.get("product_type") == "credits"
+            else 0
+        )
+        time_to_grant = (
+            product.get("amount", 0) if product.get("product_type") == "time" else 0
+        )
+
         transaction = db.log_transaction(
             user_id=user_id,
             product_id=product["id"],
@@ -88,12 +100,8 @@ def create_checkout_session(
             stripe_session_id=None,  # Will be updated after session creation
             idempotency_key=idempotency_key,
             amount_cents=product["price_usd_cents"],
-            credits_granted=(
-                product["amount"] if product["product_type"] == "credits" else 0
-            ),
-            time_granted_seconds=(
-                product["amount"] if product["product_type"] == "time" else 0
-            ),
+            credits_granted=credits_to_grant,
+            time_granted_seconds=time_to_grant,
             status="pending",
             description=f"Purchase: {product['name']}",
         )
@@ -101,12 +109,7 @@ def create_checkout_session(
         # Create checkout session with idempotency key
         session = stripe.checkout.Session.create(
             payment_method_types=["card"],
-            line_items=[
-                {
-                    "price": price_id,
-                    "quantity": 1,
-                }
-            ],
+            line_items=[{"price": price_id, "quantity": 1}],
             mode="payment",
             customer=customer_id,
             client_reference_id=str(user_id),
@@ -114,12 +117,9 @@ def create_checkout_session(
                 "user_id": str(user_id),
                 "product_id": str(product["id"]),
                 "transaction_id": str(transaction["id"]),
-                "credits_granted": str(
-                    product["amount"] if product["product_type"] == "credits" else 0
-                ),
-                "time_granted_seconds": str(
-                    product["amount"] if product["product_type"] == "time" else 0
-                ),
+                "credits_granted": str(credits_to_grant),
+                "time_granted_seconds": str(time_to_grant),
+                "is_first_purchase": str(is_first_purchase),
             },
             success_url=success_url,
             cancel_url=cancel_url,
@@ -651,33 +651,46 @@ def process_checkout_completed(event: Dict[str, Any]) -> bool:
     logger.info(f"Processing checkout completed: {session['id']}")
 
     try:
-        # Extract metadata
-        user_id = int(session["metadata"]["user_id"])
-        transaction_id = session["metadata"]["transaction_id"]
-        credits_granted = int(session["metadata"]["credits_granted"])
+        metadata = session.get("metadata", {})
+        user_id = int(metadata["user_id"])
+        transaction_id = metadata["transaction_id"]
+        credits_granted = int(metadata.get("credits_granted", 0))
+        time_granted_seconds = int(metadata.get("time_granted_seconds", 0))
 
-        # Update database
+        # Check if this is user's first purchase (before completing the transaction)
+        is_first_purchase = metadata.get("is_first_purchase") == "True"
+
+        # Update database - mark transaction as completed
         success = db.complete_transaction_and_add_credits(
             user_id=user_id,
             transaction_id=transaction_id,
             credits_granted=credits_granted,
+            time_granted_seconds=time_granted_seconds,
         )
 
         if success:
-            # Grant credits or time to user
-            if credits_granted > 0:
-                db.update_user_credits(user_id, credits_granted)
-                logger.info(f"✅ Granted {credits_granted} credits to user {user_id}")
+            logger.info(
+                f"✅ Successfully processed checkout for user {user_id}"
+            )
+            # After successful processing, check if we need to trigger the auto-recharge prompt
+            if is_first_purchase:
+                product_id = int(metadata.get("product_id"))
+                
+                # Schedule auto-recharge prompt via database storage
+                # to avoid circular import with bot_factory
+                logger.info(
+                    f"Auto-recharge prompt needed for user {user_id}, "
+                    f"product {product_id}"
+                )
+                
+                # Store in database for processing by next user interaction
+                db.store_pending_auto_recharge_prompt(user_id, product_id)
 
-            # The original code had time_granted_seconds, but it's not in the new_code.
-            # Assuming it's not needed for this specific function or will be handled elsewhere.
-            # If time_granted_seconds is truly needed, it should be extracted from session["metadata"]
-            # and passed to db.update_user_time_access.
-
-            logger.info(f"✅ Successfully processed checkout for user {user_id}")
             return True
         else:
-            logger.error(f"Failed to complete transaction and add credits for user {user_id}")
+            logger.error(
+                f"Failed to complete transaction and add credits for user {user_id}"
+            )
             return False
 
     except Exception as e:
