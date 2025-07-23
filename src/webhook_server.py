@@ -27,6 +27,9 @@ import atexit
 
 logger = logging.getLogger(__name__)
 
+# Version identifier for deployment verification
+DEPLOYMENT_VERSION = "v2.1.0-fixed-migrations"
+
 # Global variables for application instances
 telegram_app: Application = None
 
@@ -147,6 +150,7 @@ def _run_migrations_once() -> None:
             # Continue anyway for now, but with caution
                 
         logger.info("🔧 Running database migrations (process-safe)...")
+        logger.info(f"🚀 Deployment version: {DEPLOYMENT_VERSION}")
         
         try:
             # Apply database migrations with better error handling
