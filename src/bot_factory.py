@@ -30,7 +30,6 @@ async def create_application() -> Application:
     # Set default settings for the bot
     defaults = Defaults(
         parse_mode=ParseMode.MARKDOWN,
-        timeout=30.0,
         quote=True,
     )
 
