@@ -15,6 +15,16 @@ from src.plugins import PluginManager
 logger = logging.getLogger(__name__)
 
 
+async def post_init(application: Application) -> None:
+    """Post-initialization callback for the application."""
+    logger.info("🔧 Post-initialization complete")
+
+
+async def post_shutdown(application: Application) -> None:
+    """Post-shutdown callback for the application."""
+    logger.info("🔧 Post-shutdown complete")
+
+
 async def create_application() -> Application:
     """Create and configure the Telegram application with plugin system.
 
