@@ -1,11 +1,9 @@
 🚀 Manual Deployment Trigger
 =========================
-Timestamp: 2025-01-27T16:30:00Z
-Commit: post-init-fix-v3
+Timestamp: 2025-07-23T01:05:58Z
+Commit: f006f85
 Branch: main
 Deployed by: nsxo
 Host: MacBookPro
 
-CRITICAL FIX: Added missing post_init and post_shutdown functions.
-Clear Railway cache - force complete rebuild.
-Simplified bot without plugin system for debugging.
+This file triggers Railway to deploy the latest code.
