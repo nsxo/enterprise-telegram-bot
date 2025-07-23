@@ -7,7 +7,10 @@ and topic management.
 """
 
 import logging
-from typing import Dict, Any
+import time
+import asyncio
+from collections import defaultdict, deque
+from typing import Dict, Any, Optional, Callable, Awaitable
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -29,6 +32,81 @@ class BotError(Exception):
     """Raised when bot operations fail."""
 
     pass
+
+
+# Rate limiting storage
+class RateLimiter:
+    """Rate limiter for Telegram API calls."""
+    
+    def __init__(self):
+        self.global_calls = deque()  # Global rate limit tracking
+        self.chat_calls = defaultdict(deque)  # Per-chat rate limit tracking
+        self.global_limit = 30  # 30 messages per second globally
+        self.chat_limit = 1    # 1 message per second per chat
+        
+    async def wait_if_needed(self, chat_id: Optional[int] = None) -> None:
+        """Wait if rate limits would be exceeded."""
+        current_time = time.time()
+        
+        # Clean old entries (older than 1 second)
+        self._clean_old_entries(current_time)
+        
+        # Check global rate limit
+        if len(self.global_calls) >= self.global_limit:
+            sleep_time = 1.0 - (current_time - self.global_calls[0])
+            if sleep_time > 0:
+                logger.debug(f"Rate limiting: sleeping {sleep_time:.2f}s for global limit")
+                await asyncio.sleep(sleep_time)
+                self._clean_old_entries(time.time())
+        
+        # Check per-chat rate limit
+        if chat_id:
+            chat_calls = self.chat_calls[chat_id]
+            if len(chat_calls) >= self.chat_limit:
+                sleep_time = 1.0 - (current_time - chat_calls[0])
+                if sleep_time > 0:
+                    logger.debug(f"Rate limiting: sleeping {sleep_time:.2f}s for chat {chat_id}")
+                    await asyncio.sleep(sleep_time)
+                    self._clean_old_entries(time.time())
+        
+        # Record this call
+        current_time = time.time()
+        self.global_calls.append(current_time)
+        if chat_id:
+            self.chat_calls[chat_id].append(current_time)
+    
+    def _clean_old_entries(self, current_time: float) -> None:
+        """Remove entries older than 1 second."""
+        cutoff = current_time - 1.0
+        
+        # Clean global calls
+        while self.global_calls and self.global_calls[0] < cutoff:
+            self.global_calls.popleft()
+        
+        # Clean per-chat calls
+        for chat_id in list(self.chat_calls.keys()):
+            chat_calls = self.chat_calls[chat_id]
+            while chat_calls and chat_calls[0] < cutoff:
+                chat_calls.popleft()
+            
+            # Remove empty chat entries
+            if not chat_calls:
+                del self.chat_calls[chat_id]
+
+
+# Global rate limiter instance
+rate_limiter = RateLimiter()
+
+
+async def rate_limited_send(
+    send_func: Callable[..., Awaitable], 
+    chat_id: int, 
+    *args, 
+    **kwargs
+) -> Any:
+    """Wrapper for rate-limited message sending."""
+    await rate_limiter.wait_if_needed(chat_id)
+    return await send_func(*args, **kwargs)
 
 
 def is_admin_user(user_id: int) -> bool:
@@ -287,19 +365,44 @@ async def get_or_create_user_topic(
     if existing_topic_id:
         logger.info(f"Found existing topic {existing_topic_id} for user {user.id}")
 
-        # Test if topic still exists by trying to send a test message
+        # Test if topic still exists by trying to send a test message to it
         try:
-            # Try to get the topic info (this will fail if topic was deleted)
-            await context.bot.get_chat(chat_id=ADMIN_GROUP_ID)
-            # If we get here, the topic should exist, return it
-            return existing_topic_id
-        except Exception as e:
-            logger.warning(
-                f"Topic {existing_topic_id} for user {user.id} may have been deleted: {e}"
+            test_message = await context.bot.send_message(
+                chat_id=ADMIN_GROUP_ID,
+                message_thread_id=existing_topic_id,
+                text="🔄 Checking topic availability...",
+                disable_notification=True,
             )
-            # Clean up the database record and create a new topic
-            db.delete_conversation_topic(user.id, ADMIN_GROUP_ID)
-            logger.info(f"Cleaned up deleted topic record for user {user.id}")
+            
+            # If successful, delete the test message immediately
+            await context.bot.delete_message(
+                chat_id=ADMIN_GROUP_ID, 
+                message_id=test_message.message_id
+            )
+            
+            logger.info(f"✅ Topic {existing_topic_id} verified for user {user.id}")
+            return existing_topic_id
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            if any(keyword in error_msg for keyword in [
+                "thread not found", 
+                "topic not found", 
+                "message thread not found",
+                "bad request"
+            ]):
+                logger.warning(
+                    f"Topic {existing_topic_id} for user {user.id} was deleted: {e}"
+                )
+                # Clean up the database record and create a new topic
+                db.delete_conversation_topic(user.id, ADMIN_GROUP_ID)
+                logger.info(f"Cleaned up deleted topic record for user {user.id}")
+            else:
+                # Unexpected error, but assume topic exists to avoid unnecessary recreation
+                logger.warning(
+                    f"Unexpected error checking topic {existing_topic_id}: {e}"
+                )
+                return existing_topic_id
 
     # Create new topic
     topic_name = f"👤 {user.first_name}"
@@ -351,8 +454,13 @@ async def send_user_info_card(
             logger.warning(f"No user data found for {user_id}")
             return
 
-        # Format info card
+        # Format info card with enhanced information
         info_text = format_user_info_card(user_data)
+        
+        # Add topic link section
+        topic_link = create_topic_link(ADMIN_GROUP_ID, topic_id)
+        if topic_link:
+            info_text += f"\n\n🔗 **Quick Access:** [Direct Topic Link]({topic_link})"
 
         # Create admin action buttons using string callback data
         keyboard = [
@@ -372,21 +480,37 @@ async def send_user_info_card(
                     "⬆️ Upgrade Tier", callback_data=f"admin_tier_{user_id}"
                 ),
             ],
+            [
+                InlineKeyboardButton(
+                    "🔗 Topic Link", url=topic_link
+                ) if topic_link else InlineKeyboardButton(
+                    "💬 Quick Reply", callback_data=f"admin_quick_reply_{user_id}"
+                ),
+                InlineKeyboardButton(
+                    "🗂️ Archive", callback_data=f"admin_archive_{user_id}"
+                ),
+            ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Send message to topic
-        message = await context.bot.send_message(
+        # Send message to topic with rate limiting
+        message = await rate_limited_send(
+            context.bot.send_message,
+            ADMIN_GROUP_ID,
             chat_id=ADMIN_GROUP_ID,
             message_thread_id=topic_id,
             text=info_text,
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup,
+            disable_web_page_preview=True,
         )
 
-        # Pin the message
-        await context.bot.pin_chat_message(
-            chat_id=ADMIN_GROUP_ID, message_id=message.message_id
+        # Pin the message with rate limiting
+        await rate_limited_send(
+            context.bot.pin_chat_message,
+            ADMIN_GROUP_ID,
+            chat_id=ADMIN_GROUP_ID, 
+            message_id=message.message_id
         )
 
         # Update database with pinned message ID
@@ -394,12 +518,21 @@ async def send_user_info_card(
             user_id, ADMIN_GROUP_ID, topic_id, message.message_id
         )
 
-        logger.info(
-            f"✅ Sent and pinned user info card for {user_id} in topic {topic_id}"
-        )
+        logger.info(f"✅ Sent and pinned user info card for user {user_id} in topic {topic_id}")
 
     except Exception as e:
-        logger.error(f"Failed to send user info card: {e}")
+        logger.error(f"Failed to send user info card for user {user_id}: {e}")
+        # Try to send a simple fallback message
+        try:
+            fallback_text = f"👤 **User {user_id}**\n\nError loading user details. Please check manually."
+            await context.bot.send_message(
+                chat_id=ADMIN_GROUP_ID,
+                message_thread_id=topic_id,
+                text=fallback_text,
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception as fallback_error:
+            logger.error(f"Failed to send fallback user info: {fallback_error}")
 
 
 async def should_show_credit_warning(user_id: int) -> bool:

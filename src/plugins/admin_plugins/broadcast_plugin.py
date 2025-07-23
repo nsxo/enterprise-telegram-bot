@@ -70,6 +70,31 @@ class BroadcastPlugin(BasePlugin):
                 self.broadcast_schedule_callback, pattern="^broadcast_schedule$"
             )
         )
+        application.add_handler(
+            CallbackQueryHandler(
+                self.broadcast_history_callback, pattern="^broadcast_history$"
+            )
+        )
+        application.add_handler(
+            CallbackQueryHandler(
+                self.confirm_broadcast_all_callback, pattern="^confirm_broadcast_all$"
+            )
+        )
+        application.add_handler(
+            CallbackQueryHandler(
+                self.broadcast_active_24h_callback, pattern="^broadcast_active_24h$"
+            )
+        )
+        application.add_handler(
+            CallbackQueryHandler(
+                self.broadcast_active_7d_callback, pattern="^broadcast_active_7d$"
+            )
+        )
+        application.add_handler(
+            CallbackQueryHandler(
+                self.broadcast_active_30d_callback, pattern="^broadcast_active_30d$"
+            )
+        )
 
     def get_commands(self) -> Dict[str, str]:
         """Get commands provided by this plugin."""
@@ -152,9 +177,7 @@ Choose how you want to send messages to users:
 
         # Get user statistics
         total_users = db.get_user_count()
-        banned_users = (
-            db.get_banned_user_count() if hasattr(db, "get_banned_user_count") else 0
-        )
+        banned_users = db.get_banned_user_count()
         eligible_users = total_users - banned_users
 
         text = f"""
@@ -349,6 +372,153 @@ Schedule your broadcast for optimal delivery times:
             hours = int(total_seconds / 3600)
             minutes = int((total_seconds % 3600) / 60)
             return f"~{hours}h {minutes}m"
+
+    async def broadcast_history_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle broadcast history callback."""
+        query = update.callback_query
+        await query.answer()
+
+        text = """
+📊 **Broadcast History**
+
+Recent broadcasts and their performance:
+
+*This feature will show:*
+• Past broadcast messages
+• Delivery statistics
+• User engagement metrics
+• Performance analytics
+
+Coming soon in next update!
+        """
+
+        keyboard = [
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_broadcast")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
+        )
+
+    async def confirm_broadcast_all_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle confirm broadcast to all users."""
+        query = update.callback_query
+        await query.answer()
+
+        text = """
+✅ **Ready to Broadcast**
+
+Please send your message now. The next message you send will be broadcasted to all eligible users.
+
+**Note:** Make sure your message is final - this action cannot be undone!
+        """
+
+        keyboard = [
+            [InlineKeyboardButton("❌ Cancel", callback_data="admin_broadcast")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
+        )
+
+    async def broadcast_active_24h_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle broadcast to 24h active users."""
+        query = update.callback_query
+        await query.answer()
+
+        active_users = len(db.get_active_user_ids(days=1))
+        
+        text = f"""
+🔥 **Broadcast to 24h Active Users**
+
+Target: **{active_users}** users active in the last 24 hours
+
+These users have interacted with the bot recently and are most likely to engage with your message.
+
+Ready to proceed?
+        """
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Confirm", callback_data="confirm_broadcast_24h"),
+                InlineKeyboardButton("❌ Cancel", callback_data="admin_broadcast"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
+        )
+
+    async def broadcast_active_7d_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle broadcast to 7d active users."""
+        query = update.callback_query
+        await query.answer()
+
+        active_users = len(db.get_active_user_ids(days=7))
+        
+        text = f"""
+⭐ **Broadcast to 7d Active Users**
+
+Target: **{active_users}** users active in the last 7 days
+
+Good balance between reach and engagement.
+
+Ready to proceed?
+        """
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Confirm", callback_data="confirm_broadcast_7d"),
+                InlineKeyboardButton("❌ Cancel", callback_data="admin_broadcast"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
+        )
+
+    async def broadcast_active_30d_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle broadcast to 30d active users."""
+        query = update.callback_query
+        await query.answer()
+
+        active_users = len(db.get_active_user_ids(days=30))
+        
+        text = f"""
+📅 **Broadcast to 30d Active Users**
+
+Target: **{active_users}** users active in the last 30 days
+
+Maximum reach while maintaining relevance.
+
+Ready to proceed?
+        """
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Confirm", callback_data="confirm_broadcast_30d"),
+                InlineKeyboardButton("❌ Cancel", callback_data="admin_broadcast"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
+        )
 
     async def _send_broadcast_message(
         self,

@@ -597,6 +597,12 @@ def get_product_by_stripe_price_id(stripe_price_id: str) -> Optional[Dict[str, A
     return execute_query(query, (stripe_price_id,), fetch_one=True)
 
 
+def get_product_by_id(product_id: int) -> Optional[Dict[str, Any]]:
+    """Get product by its primary key ID."""
+    query = "SELECT * FROM products WHERE id = %s"
+    return execute_query(query, (product_id,), fetch_one=True)
+
+
 def get_product_by_credit_amount(credit_amount: int) -> Optional[Dict[str, Any]]:
     """
     Get a product by the number of credits it grants.
@@ -609,8 +615,8 @@ def get_product_by_credit_amount(credit_amount: int) -> Optional[Dict[str, Any]]
     """
     query = """
         SELECT * FROM products
-        WHERE credits_granted = %s AND product_type = 'credits'
-        ORDER BY price_usd ASC
+        WHERE amount = %s AND product_type = 'credits'
+        ORDER BY price_usd_cents ASC
         LIMIT 1
     """
     return execute_query(query, (credit_amount,), fetch_one=True)
@@ -873,17 +879,24 @@ def ensure_sample_products() -> None:
     """
     try:
         # First fix the schema
+        logger.info("🔧 Fixing products table schema...")
         fix_products_table_schema()
+        logger.info("✅ Products table schema fixed")
 
         # Check if products already exist
         existing_products = get_active_products()
+        logger.info(f"📊 Found {len(existing_products)} existing products")
+        
         if existing_products:
             logger.info(
-                f"Found {len(existing_products)} existing products, skipping sample creation"
+                f"✅ Found {len(existing_products)} existing products, skipping sample creation"
             )
+            # Log existing products for verification
+            for product in existing_products:
+                logger.info(f"  • {product['name']} - ${product['price_usd_cents']/100:.2f}")
             return
 
-        logger.info("No products found, creating sample products...")
+        logger.info("📦 No products found, creating sample products...")
 
         sample_products = [
             (
@@ -940,13 +953,32 @@ def ensure_sample_products() -> None:
             ON CONFLICT (stripe_price_id) DO NOTHING
         """
 
+        products_created = 0
         for product_data in sample_products:
-            execute_query(query, product_data)
+            try:
+                result = execute_query(query, product_data)
+                if result and result > 0:
+                    products_created += 1
+                    logger.info(f"✅ Created product: {product_data[1]} - ${product_data[5]/100:.2f}")
+                else:
+                    logger.info(f"⚠️ Product already exists: {product_data[1]}")
+            except Exception as product_error:
+                logger.error(f"❌ Failed to create product {product_data[1]}: {product_error}")
 
-        logger.info(f"✅ Created {len(sample_products)} sample products")
+        # Verify products were created
+        final_products = get_active_products()
+        logger.info(f"✅ Final product count: {len(final_products)} products")
+        
+        if len(final_products) == 0:
+            logger.error("❌ No products found after creation attempt!")
+        else:
+            logger.info(f"🎉 Successfully ensured {len(final_products)} products exist")
+            for product in final_products:
+                logger.info(f"  • {product['name']} - ${product['price_usd_cents']/100:.2f}")
 
     except Exception as e:
-        logger.error(f"Failed to create sample products: {e}")
+        logger.error(f"❌ Failed to ensure sample products: {e}")
+        # Don't raise - this shouldn't crash the app startup
 
 
 def apply_database_views_and_functions() -> None:
@@ -2334,3 +2366,53 @@ def apply_unread_tracking_migration() -> None:
     except Exception as e:
         logger.error(f"Failed to apply unread tracking migration: {e}")
         # Don't raise - this is a migration, let the app continue
+
+
+# =============================================================================
+# MISSING FUNCTIONS FOR ADMIN PLUGINS
+# =============================================================================
+
+
+def get_paginated_users(page: int = 1, limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Get paginated list of users for admin interface.
+
+    Args:
+        page: Page number (1-based)
+        limit: Number of users per page
+
+    Returns:
+        List of user dictionaries with essential info
+    """
+    offset = (page - 1) * limit
+    
+    query = """
+        SELECT 
+            telegram_id,
+            username,
+            first_name,
+            last_name,
+            message_credits,
+            is_banned,
+            created_at,
+            updated_at,
+            last_message_at
+        FROM users 
+        ORDER BY created_at DESC 
+        LIMIT %s OFFSET %s
+    """
+    
+    users = execute_query(query, (limit, offset), fetch_all=True)
+    return users or []
+
+
+def get_banned_user_count() -> int:
+    """
+    Get the total number of banned users.
+
+    Returns:
+        Number of banned users
+    """
+    query = "SELECT COUNT(*) as count FROM users WHERE is_banned = TRUE"
+    result = execute_query(query, fetch_one=True)
+    return result["count"] if result else 0

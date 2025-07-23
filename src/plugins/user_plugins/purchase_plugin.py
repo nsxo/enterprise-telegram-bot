@@ -41,14 +41,11 @@ class PurchasePlugin(BasePlugin):
 
     def register_handlers(self, application: Application) -> None:
         """Register all purchase handlers."""
-        # Commands
         application.add_handler(CommandHandler("buy", self.buy_command))
         application.add_handler(CommandHandler("buy10", self.buy10_command))
         application.add_handler(CommandHandler("buy25", self.buy25_command))
         application.add_handler(CommandHandler("buy50", self.buy50_command))
         application.add_handler(CommandHandler("billing", self.billing_command))
-
-        # Callbacks
         application.add_handler(
             CallbackQueryHandler(self.show_products_callback, pattern="^show_products$")
         )
@@ -62,7 +59,9 @@ class PurchasePlugin(BasePlugin):
             CallbackQueryHandler(self.show_time_options, pattern="^show_time$")
         )
         application.add_handler(
-            CallbackQueryHandler(self.process_time_buy_callback, pattern="^buy_time_.*")
+            CallbackQueryHandler(
+                self.process_time_buy_callback, pattern="^buy_time_.*"
+            )
         )
 
     def get_commands(self) -> Dict[str, str]:
@@ -163,9 +162,10 @@ Choose from our available credit packs and time-based access:
                 credit_buttons = []
                 for p in products:
                     if p.get("product_type") == "credits":
+                        price_in_dollars = p.get('price_usd_cents', 0) / 100
                         credit_buttons.append(
                             InlineKeyboardButton(
-                                f"{p.get('name', 'N/A')} - ${p.get('price_usd', 0):.2f}",
+                                f"{p.get('name', 'N/A')} - ${price_in_dollars:.2f}",
                                 callback_data=f"process_buy_{p.get('id')}",
                             )
                         )
@@ -214,12 +214,10 @@ Choose from our available credit packs and time-based access:
         product = db.get_product_by_credit_amount(amount)
         
         if not product:
-            await update.message.reply_text(
-                f"❌ No product found for {amount} credits."
-            )
+            await update.message.reply_text(f"❌ No product found for {amount} credits.")
             return
             
-        await self._create_checkout_session(update, context, user, product['id'])
+        await self._create_checkout_session(update, context, user, product["id"])
 
     async def process_buy_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -251,8 +249,17 @@ Choose from our available credit packs and time-based access:
     ) -> None:
         """Create and send a Stripe checkout session URL."""
         try:
-            checkout_url = await stripe_utils.create_checkout_session(
-                user.id, product_id
+            product = db.get_product_by_id(product_id)
+            if not product:
+                error_msg = "❌ Product not found."
+                if is_callback and update.callback_query:
+                    await update.callback_query.edit_message_text(error_msg)
+                else:
+                    await update.message.reply_text(error_msg)
+                return
+
+            checkout_url = stripe_utils.create_checkout_session(
+                user.id, product["stripe_price_id"]
             )
 
             if checkout_url:
@@ -316,12 +323,15 @@ Your credits will be added automatically after payment.
         
         keyboard = []
         for p in time_products:
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"{p['name']} - ${p['price_usd']:.2f}",
-                    callback_data=f"buy_time_{p['id']}"
-                )
-            ])
+            price_in_dollars = p.get("price_usd_cents", 0) / 100
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        f"{p['name']} - ${price_in_dollars:.2f}",
+                        callback_data=f"buy_time_{p['id']}",
+                    )
+                ]
+            )
             
         keyboard.append(
             [InlineKeyboardButton("🔙 Back to Credits", callback_data="show_products")]

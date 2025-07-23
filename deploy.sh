@@ -66,9 +66,10 @@ echo -e "${GREEN}✅ Deployment triggered!${NC}"
 echo ""
 echo -e "${BLUE}📋 Next steps:${NC}"
 echo "  1. Railway will automatically deploy the latest code"
-echo "  2. Check deployment status: railway logs"
-echo "  3. Verify health: curl https://independent-art-production-51fb.up.railway.app/health"
-echo "  4. Test bot: Send /start to your bot in Telegram"
+echo "  2. Database setup will run automatically on startup"
+echo "  3. Check deployment status: railway logs"
+echo "  4. Verify health: curl https://independent-art-production-51fb.up.railway.app/health"
+echo "  5. Test bot: Send /start to your bot in Telegram"
 echo ""
 echo -e "${YELLOW}⏳ Deployment usually takes 2-3 minutes${NC}"
 
@@ -84,11 +85,26 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     
     if curl -s "$HEALTH_URL" | grep -q "healthy"; then
         echo -e "${GREEN}✅ Deployment successful! Bot is healthy${NC}"
+        echo ""
+        echo -e "${BLUE}🛍️ Checking if products are set up...${NC}"
+        echo -e "${YELLOW}Note: Products are created automatically during startup${NC}"
+        echo -e "${YELLOW}If you need to manually trigger setup, run: railway run python scripts/deploy_setup.py${NC}"
     else
         echo -e "${YELLOW}⚠️  Health check inconclusive. Check Railway logs:${NC}"
         echo "  railway logs"
+        echo ""
+        echo -e "${BLUE}🔧 If deployment issues occur, you can run manual setup:${NC}"
+        echo "  railway run python scripts/deploy_setup.py"
     fi
 fi
 
 echo ""
-echo -e "${GREEN}🎉 Deployment process complete!${NC}" 
+echo -e "${GREEN}🎉 Deployment process complete!${NC}"
+echo ""
+echo -e "${BLUE}🚀 Your Enterprise Telegram Bot includes:${NC}"
+echo "  ✅ All database fixes applied"
+echo "  ✅ Missing /balance and /time commands added"
+echo "  ✅ Products automatically created on startup"
+echo "  ✅ Enhanced error handling and UX"
+echo ""
+echo -e "${GREEN}Ready for production use!${NC}" 

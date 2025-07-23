@@ -76,13 +76,15 @@ class UserManagementPlugin(BasePlugin):
             },
         )
 
-        application.add_handler(CommandHandler("users", self.users_command))
-        application.add_handler(gift_conversation_handler)
-
         # Commands
         application.add_handler(CommandHandler("users", self.users_command))
+        application.add_handler(CommandHandler("admin", self.admin_command))
+        application.add_handler(gift_conversation_handler)
 
         # Callbacks
+        application.add_handler(
+            CallbackQueryHandler(self.admin_dashboard_callback, pattern="^admin_dashboard$")
+        )
         application.add_handler(
             CallbackQueryHandler(self.admin_users_callback, pattern="^admin_users$")
         )
@@ -104,7 +106,68 @@ class UserManagementPlugin(BasePlugin):
 
     def get_commands(self) -> Dict[str, str]:
         """Get commands provided by this plugin."""
-        return {"users": "Manage users - search, ban, gift credits"}
+        return {
+            "users": "Manage users - search, ban, gift credits",
+            "admin": "Main admin dashboard with all admin functions"
+        }
+
+    async def admin_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Main admin dashboard command."""
+        if not await bot_utils.require_admin(update, context):
+            return
+
+        await self.admin_dashboard_callback(update, context)
+
+    async def admin_dashboard_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle admin dashboard callback - main admin interface."""
+        query = update.callback_query
+        if query:
+            await query.answer()
+
+        # Get quick stats for dashboard
+        total_users = db.get_user_count()
+        banned_users = db.get_banned_user_count()
+        unread_count = db.get_total_unread_count(ADMIN_GROUP_ID)
+        
+        text = f"""
+🔧 **Admin Dashboard**
+
+**📊 Quick Stats:**
+• Total Users: **{total_users}**
+• Banned Users: **{banned_users}**
+• Unread Messages: **{unread_count}**
+
+**⚡ Admin Tools:**
+        """
+
+        keyboard = [
+            [
+                InlineKeyboardButton("👥 User Management", callback_data="admin_users"),
+                InlineKeyboardButton("📊 Analytics", callback_data="admin_analytics"),
+            ],
+            [
+                InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
+                InlineKeyboardButton("🛍️ Products", callback_data="admin_products"),
+            ],
+            [
+                InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings"),
+                InlineKeyboardButton("🔄 Refresh", callback_data="admin_dashboard"),
+            ],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        if query:
+            await query.edit_message_text(
+                text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            await update.message.reply_text(
+                text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN
+            )
 
     async def users_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
