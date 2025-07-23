@@ -8,6 +8,7 @@ with proper security, error handling, and monitoring for production deployment.
 import logging
 import json
 import threading
+import os
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application
@@ -83,52 +84,67 @@ def _run_migrations_once() -> None:
         return
     
     try:
-        # Use database-based lock for cross-process coordination
+        # Use a simple database table for coordination that's guaranteed to exist
         migration_lock_acquired = False
         
         try:
-            # Try to acquire a migration lock in the database
+            # Try to create a simple coordination table and acquire lock
             with db.get_db_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Check if migrations are already running or completed
+                    # Create coordination table if it doesn't exist
                     cursor.execute("""
-                        SELECT value FROM bot_settings 
-                        WHERE key = 'migration_status' 
-                        FOR UPDATE NOWAIT
-                    """)
-                    result = cursor.fetchone()
-                    
-                    current_status = result['value'] if result else 'not_started'
-                    
-                    if current_status == 'completed':
-                        logger.info("📋 Migrations already completed by another worker")
-                        _migrations_completed = True
-                        return
-                    elif current_status == 'running':
-                        logger.info(
-                            "📋 Migrations currently running in another worker, waiting..."
+                        CREATE TABLE IF NOT EXISTS migration_lock (
+                            id INTEGER PRIMARY KEY DEFAULT 1,
+                            status VARCHAR(20) DEFAULT 'not_started',
+                            worker_pid INTEGER,
+                            started_at TIMESTAMPTZ DEFAULT NOW(),
+                            CHECK (id = 1)
                         )
-                        # Wait for completion and return
-                        return
-                     
-                    # Set migration status to running
-                    cursor.execute("""
-                        INSERT INTO bot_settings (key, value, description, updated_at)
-                        VALUES ('migration_status', 'running', 
-                               'Database migration coordination flag', NOW())
-                        ON CONFLICT (key) 
-                        DO UPDATE SET value = 'running', updated_at = NOW()
                     """)
+                    
+                    # Try to insert our lock row
+                    try:
+                        cursor.execute("""
+                            INSERT INTO migration_lock (id, status, worker_pid) 
+                            VALUES (1, 'running', %s)
+                        """, (os.getpid(),))
+                        migration_lock_acquired = True
+                        logger.info("🔒 Acquired migration lock")
+                    except Exception:
+                        # Lock row already exists, check status
+                        cursor.execute("SELECT status, worker_pid FROM migration_lock WHERE id = 1")
+                        result = cursor.fetchone()
+                        
+                        if result:
+                            current_status = result['status']
+                            
+                            if current_status == 'completed':
+                                logger.info("📋 Migrations already completed by another worker")
+                                _migrations_completed = True
+                                return
+                            elif current_status == 'running':
+                                logger.info("📋 Migrations currently running in another worker, skipping...")
+                                return
+                        
+                        # Try to update to running if status is failed or not_started
+                        cursor.execute("""
+                            UPDATE migration_lock 
+                            SET status = 'running', worker_pid = %s, started_at = NOW()
+                            WHERE id = 1 AND status IN ('not_started', 'failed')
+                        """, (os.getpid(),))
+                        
+                        if cursor.rowcount > 0:
+                            migration_lock_acquired = True
+                            logger.info("🔒 Acquired migration lock after cleanup")
+                        else:
+                            logger.info("📋 Another worker is handling migrations")
+                            return
+                    
                     conn.commit()
-                    migration_lock_acquired = True
                     
         except Exception as lock_error:
-            if "could not obtain lock" in str(lock_error).lower():
-                logger.info("📋 Another worker is running migrations, skipping...")
-                return
-            else:
-                logger.warning(f"Could not acquire migration lock: {lock_error}")
-                # Continue anyway, but with caution
+            logger.warning(f"Could not acquire migration lock: {lock_error}")
+            # Continue anyway for now, but with caution
                 
         logger.info("🔧 Running database migrations (process-safe)...")
         
@@ -171,9 +187,9 @@ def _run_migrations_once() -> None:
                     with db.get_db_connection() as conn:
                         with conn.cursor() as cursor:
                             cursor.execute("""
-                                UPDATE bot_settings 
-                                SET value = 'completed', updated_at = NOW()
-                                WHERE key = 'migration_status'
+                                UPDATE migration_lock 
+                                SET status = 'completed', started_at = NOW()
+                                WHERE id = 1
                             """)
                             conn.commit()
                 except Exception as e:
@@ -191,9 +207,9 @@ def _run_migrations_once() -> None:
                     with db.get_db_connection() as conn:
                         with conn.cursor() as cursor:
                             cursor.execute("""
-                                UPDATE bot_settings 
-                                SET value = 'failed', updated_at = NOW()
-                                WHERE key = 'migration_status'
+                                UPDATE migration_lock 
+                                SET status = 'failed', started_at = NOW()
+                                WHERE id = 1
                             """)
                             conn.commit()
                 except Exception:
@@ -204,7 +220,7 @@ def _run_migrations_once() -> None:
             
     except Exception as e:
         logger.error(f"❌ Migration coordination failed: {e}")
-        # Don't prevent app startup for coordination failures
+        # Don't prevent app startup for coordination failures unless it's a migration error
         if "migration" in str(e).lower():
             raise
 

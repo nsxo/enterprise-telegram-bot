@@ -26,9 +26,8 @@ from enum import Enum
 from src import database as db
 from src.config import ADMIN_USER_ID, ADMIN_GROUP_ID, CREDIT_WARNING_THRESHOLD
 from src.services.error_service import (
-    handle_error,
-    get_user_friendly_error_message,
-    DatabaseError,
+    ErrorService,
+    ErrorType,
 )
 
 logger = logging.getLogger(__name__)

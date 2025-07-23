@@ -13,6 +13,7 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, App
 from telegram.constants import ParseMode
 
 from src.plugins.base_plugin import BasePlugin, PluginMetadata
+from src.services.error_service import ErrorService, ErrorType
 from src import database as db
 from src import bot_utils
 

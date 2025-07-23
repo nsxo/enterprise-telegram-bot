@@ -11,6 +11,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, Application
 
 from src.plugins.base_plugin import BasePlugin, PluginMetadata
+from src.services.error_service import ErrorService, ErrorType
 from src import database as db
 from src import bot_utils
 from src.config import ADMIN_GROUP_ID
