@@ -111,6 +111,10 @@ def _run_migrations_once() -> None:
             logger.info("📝 Applying performance indexes migration...")
             db.apply_performance_indexes_migration()
             
+            # Apply message references table migration
+            logger.info("📝 Applying message references table migration...")
+            db.apply_message_references_table_migration()
+            
             _migrations_completed = True
             logger.info("✅ All database migrations completed successfully")
             

@@ -11,8 +11,8 @@ from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ParseMode,
 )
+from telegram.constants import ParseMode
 from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
@@ -23,6 +23,7 @@ from telegram.ext import (
 from src.plugins.base_plugin import BasePlugin
 from src import database as db
 from src import stripe_utils
+from src.services.error_service import ErrorService, ErrorType
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,9 @@ class PurchasePlugin(BasePlugin):
 
         except Exception as e:
             logger.error(f"Error in show_products_callback: {e}")
-            await handle_error(update, context, "Error loading products.")
+            await ErrorService.handle_error(
+                update, context, ErrorType.SYSTEM_ERROR, e, "Error loading products."
+            )
 
     async def billing_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -440,9 +443,10 @@ class PurchasePlugin(BasePlugin):
             logger.error(f"Error processing buy callback for user {user.id}: {e}")
             await handle_error(update, context, "Error creating checkout session.")
 
+
 async def handle_error(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str):
     """A local error handler for cleaner code."""
-    if update.callback_query:
-        await update.callback_query.edit_message_text(f"❌ {message}")
-    else:
-        await update.message.reply_text(f"❌ {message}")
+    await ErrorService.handle_error(
+        update, context, ErrorType.SYSTEM_ERROR, 
+        Exception(message), message
+    )

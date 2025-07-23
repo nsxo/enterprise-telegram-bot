@@ -2460,7 +2460,7 @@ def apply_performance_indexes_migration() -> None:
             {
                 "name": "idx_conversations_unread_priority",
                 "sql": """
-                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_conversations_unread_priority 
+                    CREATE INDEX IF NOT EXISTS idx_conversations_unread_priority 
                     ON conversations (admin_group_id, unread_count DESC, last_user_message_at DESC) 
                     WHERE status = 'open' AND unread_count > 0
                 """,
@@ -2471,7 +2471,7 @@ def apply_performance_indexes_migration() -> None:
             {
                 "name": "idx_transactions_user_status_date",
                 "sql": """
-                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_user_status_date 
+                    CREATE INDEX IF NOT EXISTS idx_transactions_user_status_date 
                     ON transactions (user_id, status, created_at DESC)
                 """,
                 "description": "Optimize user transaction history queries"
@@ -2481,7 +2481,7 @@ def apply_performance_indexes_migration() -> None:
             {
                 "name": "idx_users_low_credits",
                 "sql": """
-                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_low_credits 
+                    CREATE INDEX IF NOT EXISTS idx_users_low_credits 
                     ON users (message_credits, tier_id, auto_recharge_enabled) 
                     WHERE message_credits <= 10 AND is_banned = false
                 """,
@@ -2492,7 +2492,7 @@ def apply_performance_indexes_migration() -> None:
             {
                 "name": "idx_transactions_product_completed",
                 "sql": """
-                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_product_completed 
+                    CREATE INDEX IF NOT EXISTS idx_transactions_product_completed 
                     ON transactions (product_id, status, created_at DESC) 
                     WHERE status = 'completed'
                 """,
@@ -2503,7 +2503,7 @@ def apply_performance_indexes_migration() -> None:
             {
                 "name": "idx_users_stripe_customer",
                 "sql": """
-                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_stripe_customer 
+                    CREATE INDEX IF NOT EXISTS idx_users_stripe_customer 
                     ON users (stripe_customer_id) 
                     WHERE stripe_customer_id IS NOT NULL
                 """,
@@ -2514,7 +2514,7 @@ def apply_performance_indexes_migration() -> None:
             {
                 "name": "idx_message_references_lookup",
                 "sql": """
-                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_message_references_lookup 
+                    CREATE INDEX IF NOT EXISTS idx_message_references_lookup 
                     ON message_references (user_id, topic_id, created_at DESC)
                 """,
                 "description": "Optimize message reference lookups"
@@ -2524,7 +2524,7 @@ def apply_performance_indexes_migration() -> None:
             {
                 "name": "idx_bot_settings_key_updated",
                 "sql": """
-                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_bot_settings_key_updated 
+                    CREATE INDEX IF NOT EXISTS idx_bot_settings_key_updated 
                     ON bot_settings (key, updated_at DESC)
                 """,
                 "description": "Optimize bot settings lookups"
@@ -2561,6 +2561,34 @@ def apply_performance_indexes_migration() -> None:
     except Exception as e:
         logger.error(f"Failed to apply performance indexes migration: {e}")
         # Don't raise - this is a migration, let the app continue
+
+
+def apply_message_references_table_migration() -> None:
+    """
+    Create message_references table if it doesn't exist.
+    """
+    try:
+        logger.info("🔧 Applying message_references table migration...")
+
+        create_table_query = """
+            CREATE TABLE IF NOT EXISTS message_references (
+                id SERIAL PRIMARY KEY,
+                user_message_id BIGINT NOT NULL,
+                admin_message_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+                topic_id INT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (user_message_id, user_id)
+            )
+        """
+        
+        execute_query(create_table_query)
+        logger.info("✅ Message references table created successfully")
+
+    except Exception as e:
+        logger.error(f"Failed to apply message_references migration: {e}")
+        # Don't raise - this is a migration, let the app continue
+
 
 # Add optimized analytics function
 def get_optimized_admin_analytics_data() -> Dict[str, Any]:
