@@ -67,27 +67,73 @@ class AsyncLoopManager:
 # Global loop manager instance
 loop_manager = AsyncLoopManager()
 
-# Migration lock to prevent concurrent execution
-_migration_lock = threading.Lock()
+# Migration coordination to prevent concurrent execution across workers
 _migrations_completed = False
 
 
 def _run_migrations_once() -> None:
     """
     Run database migrations only once, even with multiple Gunicorn workers.
-    Uses a global lock to prevent race conditions.
+    Uses a database-based lock to prevent race conditions across processes.
     """
     global _migrations_completed
     
-    with _migration_lock:
-        if _migrations_completed:
-            logger.info("📋 Migrations already completed by another worker")
-            return
+    if _migrations_completed:
+        logger.info("📋 Migrations already completed by this worker")
+        return
+    
+    try:
+        # Use database-based lock for cross-process coordination
+        migration_lock_acquired = False
         
         try:
-            logger.info("🔧 Running database migrations (worker-safe)...")
-            
-            # Apply database migrations
+            # Try to acquire a migration lock in the database
+            with db.get_db_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Check if migrations are already running or completed
+                    cursor.execute("""
+                        SELECT value FROM bot_settings 
+                        WHERE key = 'migration_status' 
+                        FOR UPDATE NOWAIT
+                    """)
+                    result = cursor.fetchone()
+                    
+                    current_status = result['value'] if result else 'not_started'
+                    
+                    if current_status == 'completed':
+                        logger.info("📋 Migrations already completed by another worker")
+                        _migrations_completed = True
+                        return
+                    elif current_status == 'running':
+                        logger.info(
+                            "📋 Migrations currently running in another worker, waiting..."
+                        )
+                        # Wait for completion and return
+                        return
+                     
+                    # Set migration status to running
+                    cursor.execute("""
+                        INSERT INTO bot_settings (key, value, description, updated_at)
+                        VALUES ('migration_status', 'running', 
+                               'Database migration coordination flag', NOW())
+                        ON CONFLICT (key) 
+                        DO UPDATE SET value = 'running', updated_at = NOW()
+                    """)
+                    conn.commit()
+                    migration_lock_acquired = True
+                    
+        except Exception as lock_error:
+            if "could not obtain lock" in str(lock_error).lower():
+                logger.info("📋 Another worker is running migrations, skipping...")
+                return
+            else:
+                logger.warning(f"Could not acquire migration lock: {lock_error}")
+                # Continue anyway, but with caution
+                
+        logger.info("🔧 Running database migrations (process-safe)...")
+        
+        try:
+            # Apply database migrations with better error handling
             logger.info("📝 Applying conversation table fix...")
             db.apply_conversation_table_fix()
             
@@ -107,6 +153,10 @@ def _run_migrations_once() -> None:
             logger.info("📝 Applying database views and functions...")
             db.apply_database_views_and_functions()
             
+            # Clean up any problematic indexes first
+            logger.info("📝 Cleaning problematic indexes...")
+            db.clean_problematic_indexes()
+            
             # Apply performance indexes migration
             logger.info("📝 Applying performance indexes migration...")
             db.apply_performance_indexes_migration()
@@ -115,11 +165,47 @@ def _run_migrations_once() -> None:
             logger.info("📝 Applying message references table migration...")
             db.apply_message_references_table_migration()
             
+            # Mark migrations as completed
+            if migration_lock_acquired:
+                try:
+                    with db.get_db_connection() as conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute("""
+                                UPDATE bot_settings 
+                                SET value = 'completed', updated_at = NOW()
+                                WHERE key = 'migration_status'
+                            """)
+                            conn.commit()
+                except Exception as e:
+                    logger.warning(f"Could not update migration status: {e}")
+            
             _migrations_completed = True
             logger.info("✅ All database migrations completed successfully")
             
-        except Exception as e:
-            logger.error(f"❌ Migration failed: {e}")
+        except Exception as migration_error:
+            logger.error(f"❌ Migration failed: {migration_error}")
+            
+            # Reset migration status on failure
+            if migration_lock_acquired:
+                try:
+                    with db.get_db_connection() as conn:
+                        with conn.cursor() as cursor:
+                            cursor.execute("""
+                                UPDATE bot_settings 
+                                SET value = 'failed', updated_at = NOW()
+                                WHERE key = 'migration_status'
+                            """)
+                            conn.commit()
+                except Exception:
+                    pass  # Don't fail on cleanup failure
+            
+            # Re-raise to prevent app from starting with broken state
+            raise
+            
+    except Exception as e:
+        logger.error(f"❌ Migration coordination failed: {e}")
+        # Don't prevent app startup for coordination failures
+        if "migration" in str(e).lower():
             raise
 
 

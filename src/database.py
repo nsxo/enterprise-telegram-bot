@@ -2450,11 +2450,13 @@ def apply_performance_indexes_migration() -> None:
     """
     Apply critical performance indexes that are missing.
     These indexes improve query performance for high-traffic scenarios.
+    NOTE: Indexes are created WITHOUT CONCURRENTLY to avoid transaction block issues.
     """
     try:
         logger.info("🔧 Applying performance indexes migration...")
 
         # Index definitions for better performance
+        # NOTE: Using IF NOT EXISTS instead of CONCURRENTLY to avoid transaction issues
         indexes = [
             # High-priority conversation queries
             {
@@ -2531,19 +2533,46 @@ def apply_performance_indexes_migration() -> None:
             }
         ]
 
-        # Apply each index
+        # Apply each index with individual error handling
+        successful_indexes = 0
+        failed_indexes = 0
+        
         for index in indexes:
             try:
-                execute_query(index["sql"])
+                # Use individual connections to avoid transaction block issues
+                with get_db_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(index["sql"])
+                        conn.commit()
+                
                 logger.info(f"✅ Created index: {index['name']} - {index['description']}")
+                successful_indexes += 1
+                
             except Exception as e:
                 error_msg = str(e).lower()
                 if "already exists" in error_msg or "relation" in error_msg:
                     logger.info(f"✅ Index {index['name']} already exists")
+                    successful_indexes += 1
+                elif "concurrently" in error_msg:
+                    # If we encounter concurrent index errors, try without it
+                    logger.warning(f"Retrying index {index['name']} without concurrent...")
+                    try:
+                        # Remove any CONCURRENTLY if it somehow got added
+                        simple_sql = index["sql"].replace("CONCURRENTLY", "")
+                        with get_db_connection() as conn:
+                            with conn.cursor() as cursor:
+                                cursor.execute(simple_sql)
+                                conn.commit()
+                        logger.info(f"✅ Created index on retry: {index['name']}")
+                        successful_indexes += 1
+                    except Exception as retry_error:
+                        logger.warning(f"Could not create index {index['name']}: {retry_error}")
+                        failed_indexes += 1
                 else:
                     logger.warning(f"Could not create index {index['name']}: {e}")
+                    failed_indexes += 1
 
-        # Update table statistics for better query planning
+        # Update table statistics for better query planning (non-critical)
         statistics_tables = [
             "users", "transactions", "conversations", "products", 
             "message_references", "bot_settings"
@@ -2551,12 +2580,458 @@ def apply_performance_indexes_migration() -> None:
         
         for table in statistics_tables:
             try:
-                execute_query(f"ANALYZE {table}")
+                with get_db_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(f"ANALYZE {table}")
+                        conn.commit()
                 logger.debug(f"Updated statistics for table: {table}")
             except Exception as e:
-                logger.warning(f"Could not analyze table {table}: {e}")
+                logger.debug(f"Could not analyze table {table}: {e}")
 
-        logger.info("✅ Performance indexes migration completed")
+        logger.info(
+            f"✅ Performance indexes migration completed: "
+            f"{successful_indexes} successful, {failed_indexes} failed"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to apply performance indexes migration: {e}")
+        # Don't raise - this is a migration, let the app continue
+
+
+def apply_message_references_table_migration() -> None:
+    """
+    Create message_references table if it doesn't exist.
+    """
+    try:
+        logger.info("🔧 Applying message_references table migration...")
+
+        create_table_query = """
+            CREATE TABLE IF NOT EXISTS message_references (
+                id SERIAL PRIMARY KEY,
+                user_message_id BIGINT NOT NULL,
+                admin_message_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+                topic_id INT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (user_message_id, user_id)
+            )
+        """
+        
+        execute_query(create_table_query)
+        logger.info("✅ Message references table created successfully")
+
+    except Exception as e:
+        logger.error(f"Failed to apply message_references migration: {e}")
+        # Don't raise - this is a migration, let the app continue
+
+
+# Add optimized analytics function
+def get_optimized_admin_analytics_data() -> Dict[str, Any]:
+    """
+    Optimized version of admin analytics data with combined queries for better performance.
+    Uses CTEs and window functions to reduce database roundtrips.
+
+    Returns:
+        Dictionary with comprehensive analytics metrics
+    """
+    try:
+        # Combined analytics query using CTEs for efficiency
+        combined_analytics_query = """
+            WITH user_metrics AS (
+                SELECT 
+                    COUNT(*) as total_users,
+                    COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days') as new_users_week,
+                    COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days') as new_users_month,
+                    COUNT(*) FILTER (WHERE last_message_at >= NOW() - INTERVAL '7 days') as active_users_week,
+                    COUNT(*) FILTER (WHERE last_message_at >= NOW() - INTERVAL '30 days') as active_users_month,
+                    COALESCE(SUM(message_credits), 0) as total_credits_in_circulation,
+                    COALESCE(AVG(message_credits), 0) as avg_user_credits,
+                    COUNT(*) FILTER (WHERE message_credits <= 5) as users_low_credits,
+                    COUNT(*) FILTER (WHERE message_credits = 0) as users_no_credits
+                FROM users
+            ),
+            transaction_metrics AS (
+                SELECT 
+                    COUNT(*) as total_transactions,
+                    COUNT(*) FILTER (WHERE status = 'completed') as successful_transactions,
+                    COUNT(*) FILTER (WHERE status = 'completed' AND created_at >= NOW() - INTERVAL '7 days') as transactions_week,
+                    COUNT(*) FILTER (WHERE status = 'completed' AND created_at >= NOW() - INTERVAL '30 days') as transactions_month,
+                    COALESCE(SUM(amount_paid_usd_cents) FILTER (WHERE status = 'completed'), 0) as total_revenue_cents,
+                    COALESCE(SUM(amount_paid_usd_cents) FILTER (WHERE status = 'completed' AND created_at >= NOW() - INTERVAL '7 days'), 0) as revenue_week_cents,
+                    COALESCE(SUM(amount_paid_usd_cents) FILTER (WHERE status = 'completed' AND created_at >= NOW() - INTERVAL '30 days'), 0) as revenue_month_cents,
+                    COALESCE(AVG(amount_paid_usd_cents) FILTER (WHERE status = 'completed'), 0) as avg_transaction_value
+                FROM transactions
+            ),
+            conversation_metrics AS (
+                SELECT 
+                    COUNT(*) as total_conversations,
+                    COUNT(*) FILTER (WHERE status = 'open') as active_conversations,
+                    COUNT(*) FILTER (WHERE last_user_message_at >= NOW() - INTERVAL '24 hours') as recent_conversations
+                FROM conversations
+            )
+            SELECT 
+                json_build_object(
+                    'total_users', u.total_users,
+                    'new_users_week', u.new_users_week,
+                    'new_users_month', u.new_users_month,
+                    'active_users_week', u.active_users_week,
+                    'active_users_month', u.active_users_month
+                ) as user_stats,
+                json_build_object(
+                    'total_transactions', t.total_transactions,
+                    'successful_transactions', t.successful_transactions,
+                    'transactions_week', t.transactions_week,
+                    'transactions_month', t.transactions_month,
+                    'total_revenue_cents', t.total_revenue_cents,
+                    'revenue_week_cents', t.revenue_week_cents,
+                    'revenue_month_cents', t.revenue_month_cents,
+                    'avg_transaction_value', t.avg_transaction_value
+                ) as revenue_stats,
+                json_build_object(
+                    'total_credits_in_circulation', u.total_credits_in_circulation,
+                    'avg_user_credits', u.avg_user_credits,
+                    'users_low_credits', u.users_low_credits,
+                    'users_no_credits', u.users_no_credits
+                ) as credit_stats,
+                json_build_object(
+                    'total_conversations', c.total_conversations,
+                    'active_conversations', c.active_conversations,
+                    'recent_conversations', c.recent_conversations
+                ) as conversation_stats
+            FROM user_metrics u, transaction_metrics t, conversation_metrics c
+        """
+        
+        analytics_result = execute_query(combined_analytics_query, fetch_one=True)
+        
+        # Separate optimized product stats query
+        product_stats_query = """
+            SELECT 
+                p.name,
+                p.product_type,
+                COALESCE(t.sales_count, 0) as sales_count,
+                COALESCE(t.revenue_cents, 0) as revenue_cents
+            FROM products p
+            LEFT JOIN (
+                SELECT 
+                    product_id,
+                    COUNT(*) as sales_count,
+                    SUM(amount_paid_usd_cents) as revenue_cents
+                FROM transactions 
+                WHERE status = 'completed'
+                GROUP BY product_id
+            ) t ON p.id = t.product_id
+            WHERE p.is_active = TRUE
+            ORDER BY t.revenue_cents DESC NULLS LAST
+        """
+        
+        product_stats = execute_query(product_stats_query, fetch_all=True)
+
+        return {
+            "user_stats": analytics_result["user_stats"] if analytics_result else {},
+            "revenue_stats": analytics_result["revenue_stats"] if analytics_result else {},
+            "credit_stats": analytics_result["credit_stats"] if analytics_result else {},
+            "conversation_stats": analytics_result["conversation_stats"] if analytics_result else {},
+            "product_stats": product_stats or [],
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting optimized admin analytics data: {e}")
+        # Fallback to original function
+        return get_admin_analytics_data()
+
+
+def get_optimized_user_dashboard_data(user_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Optimized version of user dashboard data with single query instead of multiple lookups.
+    
+    Args:
+        user_id: User's Telegram ID
+        
+    Returns:
+        Complete user dashboard data or None if user not found
+    """
+    query = """
+        SELECT 
+            u.telegram_id,
+            u.username,
+            u.first_name,
+            u.last_name,
+            u.message_credits,
+            u.time_credits_expires_at,
+            u.created_at as user_since,
+            u.auto_recharge_enabled,
+            u.stripe_customer_id,
+            t.name as tier_name,
+            t.permissions as tier_permissions,
+            COALESCE(tr.total_spent_cents, 0) as total_spent_cents,
+            COALESCE(tr.total_purchases, 0) as total_purchases,
+            c.topic_id,
+            c.last_user_message_at,
+            c.status as conversation_status
+        FROM users u
+        LEFT JOIN tiers t ON u.tier_id = t.id
+        LEFT JOIN (
+            SELECT 
+                user_id,
+                SUM(amount_paid_usd_cents) as total_spent_cents,
+                COUNT(*) as total_purchases
+            FROM transactions 
+            WHERE status = 'completed'
+            GROUP BY user_id
+        ) tr ON u.telegram_id = tr.user_id
+        LEFT JOIN conversations c ON u.telegram_id = c.user_id AND c.status = 'open'
+        WHERE u.telegram_id = %s
+    """
+    
+    return execute_query(query, (user_id,), fetch_one=True)
+
+
+def get_optimized_conversation_list(admin_group_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+    """
+    Optimized conversation list with user details in single query.
+    
+    Args:
+        admin_group_id: Admin group ID
+        limit: Maximum conversations to return
+        
+    Returns:
+        List of conversations with user details
+    """
+    query = """
+        SELECT 
+            c.id as conversation_id,
+            c.user_id,
+            c.topic_id,
+            c.status,
+            c.unread_count,
+            c.last_user_message_at,
+            c.created_at as conversation_created_at,
+            u.username,
+            u.first_name,
+            u.last_name,
+            u.message_credits,
+            t.name as tier_name,
+            COALESCE(tr.total_spent_cents, 0) as total_spent_cents,
+            COALESCE(tr.total_purchases, 0) as total_purchases
+        FROM conversations c
+        JOIN users u ON c.user_id = u.telegram_id
+        LEFT JOIN tiers t ON u.tier_id = t.id
+        LEFT JOIN (
+            SELECT 
+                user_id,
+                SUM(amount_paid_usd_cents) as total_spent_cents,
+                COUNT(*) as total_purchases
+            FROM transactions 
+            WHERE status = 'completed'
+            GROUP BY user_id
+        ) tr ON u.telegram_id = tr.user_id
+        WHERE c.admin_group_id = %s
+        ORDER BY 
+            c.unread_count DESC NULLS LAST,
+            c.last_user_message_at DESC NULLS LAST
+        LIMIT %s
+    """
+    
+    return execute_query(query, (admin_group_id, limit), fetch_all=True)
+
+# Add new migration function before the end of the file
+def clean_problematic_indexes() -> None:
+    """
+    Clean up any problematic indexes that might be causing CONCURRENTLY errors.
+    This function removes any incomplete or problematic index creation attempts.
+    """
+    try:
+        logger.info("🧹 Cleaning up problematic indexes...")
+        
+        # List of potentially problematic indexes to check and clean
+        problematic_indexes = [
+            "idx_conversations_unread_priority",
+            "idx_transactions_user_status_date", 
+            "idx_users_low_credits",
+            "idx_transactions_product_completed",
+            "idx_users_stripe_customer",
+            "idx_message_references_lookup",
+            "idx_bot_settings_key_updated"
+        ]
+        
+        cleaned_count = 0
+        
+        for index_name in problematic_indexes:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor() as cursor:
+                        # Check if index exists and is problematic
+                        cursor.execute("""
+                            SELECT indexname, indexdef 
+                            FROM pg_indexes 
+                            WHERE indexname = %s
+                        """, (index_name,))
+                        
+                        result = cursor.fetchone()
+                        
+                        if result and "CONCURRENTLY" in result['indexdef']:
+                            logger.info(f"Dropping problematic index: {index_name}")
+                            cursor.execute(f"DROP INDEX IF EXISTS {index_name}")
+                            conn.commit()
+                            cleaned_count += 1
+                            
+            except Exception as e:
+                logger.debug(f"Could not clean index {index_name}: {e}")
+                # Continue with other indexes
+        
+        logger.info(f"✅ Cleaned {cleaned_count} problematic indexes")
+        
+    except Exception as e:
+        logger.warning(f"Index cleanup failed: {e}")
+        # Don't raise - this is cleanup, not critical
+
+
+def apply_performance_indexes_migration() -> None:
+    """
+    Apply critical performance indexes that are missing.
+    These indexes improve query performance for high-traffic scenarios.
+    NOTE: Indexes are created WITHOUT CONCURRENTLY to avoid transaction block issues.
+    """
+    try:
+        logger.info("🔧 Applying performance indexes migration...")
+
+        # Index definitions for better performance
+        # NOTE: Using IF NOT EXISTS instead of CONCURRENTLY to avoid transaction issues
+        indexes = [
+            # High-priority conversation queries
+            {
+                "name": "idx_conversations_unread_priority",
+                "sql": """
+                    CREATE INDEX IF NOT EXISTS idx_conversations_unread_priority 
+                    ON conversations (admin_group_id, unread_count DESC, last_user_message_at DESC) 
+                    WHERE status = 'open' AND unread_count > 0
+                """,
+                "description": "Optimize unread conversation queries"
+            },
+            
+            # User transaction lookups
+            {
+                "name": "idx_transactions_user_status_date",
+                "sql": """
+                    CREATE INDEX IF NOT EXISTS idx_transactions_user_status_date 
+                    ON transactions (user_id, status, created_at DESC)
+                """,
+                "description": "Optimize user transaction history queries"
+            },
+            
+            # Low credit user identification  
+            {
+                "name": "idx_users_low_credits",
+                "sql": """
+                    CREATE INDEX IF NOT EXISTS idx_users_low_credits 
+                    ON users (message_credits, tier_id, auto_recharge_enabled) 
+                    WHERE message_credits <= 10 AND is_banned = false
+                """,
+                "description": "Optimize low credit user queries for auto-recharge"
+            },
+            
+            # Product performance tracking
+            {
+                "name": "idx_transactions_product_completed",
+                "sql": """
+                    CREATE INDEX IF NOT EXISTS idx_transactions_product_completed 
+                    ON transactions (product_id, status, created_at DESC) 
+                    WHERE status = 'completed'
+                """,
+                "description": "Optimize product performance analytics"
+            },
+            
+            # Stripe customer lookups
+            {
+                "name": "idx_users_stripe_customer",
+                "sql": """
+                    CREATE INDEX IF NOT EXISTS idx_users_stripe_customer 
+                    ON users (stripe_customer_id) 
+                    WHERE stripe_customer_id IS NOT NULL
+                """,
+                "description": "Optimize Stripe customer ID lookups"
+            },
+            
+            # Message reference performance
+            {
+                "name": "idx_message_references_lookup",
+                "sql": """
+                    CREATE INDEX IF NOT EXISTS idx_message_references_lookup 
+                    ON message_references (user_id, topic_id, created_at DESC)
+                """,
+                "description": "Optimize message reference lookups"
+            },
+            
+            # Bot settings performance
+            {
+                "name": "idx_bot_settings_key_updated",
+                "sql": """
+                    CREATE INDEX IF NOT EXISTS idx_bot_settings_key_updated 
+                    ON bot_settings (key, updated_at DESC)
+                """,
+                "description": "Optimize bot settings lookups"
+            }
+        ]
+
+        # Apply each index with individual error handling
+        successful_indexes = 0
+        failed_indexes = 0
+        
+        for index in indexes:
+            try:
+                # Use individual connections to avoid transaction block issues
+                with get_db_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(index["sql"])
+                        conn.commit()
+                
+                logger.info(f"✅ Created index: {index['name']} - {index['description']}")
+                successful_indexes += 1
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "already exists" in error_msg or "relation" in error_msg:
+                    logger.info(f"✅ Index {index['name']} already exists")
+                    successful_indexes += 1
+                elif "concurrently" in error_msg:
+                    # If we encounter concurrent index errors, try without it
+                    logger.warning(f"Retrying index {index['name']} without concurrent...")
+                    try:
+                        # Remove any CONCURRENTLY if it somehow got added
+                        simple_sql = index["sql"].replace("CONCURRENTLY", "")
+                        with get_db_connection() as conn:
+                            with conn.cursor() as cursor:
+                                cursor.execute(simple_sql)
+                                conn.commit()
+                        logger.info(f"✅ Created index on retry: {index['name']}")
+                        successful_indexes += 1
+                    except Exception as retry_error:
+                        logger.warning(f"Could not create index {index['name']}: {retry_error}")
+                        failed_indexes += 1
+                else:
+                    logger.warning(f"Could not create index {index['name']}: {e}")
+                    failed_indexes += 1
+
+        # Update table statistics for better query planning (non-critical)
+        statistics_tables = [
+            "users", "transactions", "conversations", "products", 
+            "message_references", "bot_settings"
+        ]
+        
+        for table in statistics_tables:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(f"ANALYZE {table}")
+                        conn.commit()
+                logger.debug(f"Updated statistics for table: {table}")
+            except Exception as e:
+                logger.debug(f"Could not analyze table {table}: {e}")
+
+        logger.info(
+            f"✅ Performance indexes migration completed: "
+            f"{successful_indexes} successful, {failed_indexes} failed"
+        )
 
     except Exception as e:
         logger.error(f"Failed to apply performance indexes migration: {e}")
