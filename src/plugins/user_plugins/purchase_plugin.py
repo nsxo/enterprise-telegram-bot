@@ -63,6 +63,16 @@ class PurchasePlugin(BasePlugin):
                 self.process_time_buy_callback, pattern="^buy_time_.*"
             )
         )
+        # Add auto-recharge handlers
+        application.add_handler(
+            CallbackQueryHandler(self.setup_auto_recharge_callback, pattern="^setup_auto_recharge$")
+        )
+        application.add_handler(
+            CallbackQueryHandler(self.toggle_auto_recharge_callback, pattern="^toggle_auto_recharge$")
+        )
+        application.add_handler(
+            CallbackQueryHandler(self.auto_recharge_product_callback, pattern="^auto_recharge_product_.*")
+        )
 
     def get_commands(self) -> Dict[str, str]:
         """Get commands provided by this plugin."""
@@ -105,7 +115,22 @@ class PurchasePlugin(BasePlugin):
         user = update.effective_user
 
         try:
-            portal_url = await stripe_utils.create_billing_portal_session(user.id)
+            # Get user data from database to find Stripe customer ID
+            user_data = db.get_user(user.id)
+            if not user_data:
+                await update.message.reply_text(
+                    "❌ User not found. Please contact support."
+                )
+                return
+
+            stripe_customer_id = user_data.get("stripe_customer_id")
+            if not stripe_customer_id:
+                await update.message.reply_text(
+                    "❌ No billing account found. Please make a purchase first to set up billing."
+                )
+                return
+
+            portal_url = stripe_utils.create_billing_portal_session(stripe_customer_id)
 
             if portal_url:
                 text = """
@@ -126,8 +151,7 @@ and update your subscription details securely in our billing portal.
 
             else:
                 await update.message.reply_text(
-                    "❌ Could not create a billing session. "
-                    "You may need to make a purchase first."
+                    "❌ Could not create a billing session. Please try again later."
                 )
 
         except Exception as e:

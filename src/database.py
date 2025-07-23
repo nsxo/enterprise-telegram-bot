@@ -2416,3 +2416,58 @@ def get_banned_user_count() -> int:
     query = "SELECT COUNT(*) as count FROM users WHERE is_banned = TRUE"
     result = execute_query(query, fetch_one=True)
     return result["count"] if result else 0
+
+
+def apply_conversations_updated_at_fix() -> None:
+    """
+    Add the missing updated_at column to conversations table.
+    This fixes the error: column "updated_at" of relation "conversations" does not exist
+    """
+    try:
+        logger.info("🔧 Adding missing updated_at column to conversations table...")
+
+        # Check if the column already exists
+        check_column_query = """
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'conversations' 
+            AND column_name = 'updated_at'
+        """
+        existing_column = execute_query(check_column_query, fetch_one=True)
+
+        if existing_column:
+            logger.info("✅ updated_at column already exists in conversations table")
+            return
+
+        # Add the missing column
+        add_column_query = """
+            ALTER TABLE conversations 
+            ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW()
+        """
+        execute_query(add_column_query)
+        logger.info("✅ Added updated_at column to conversations table")
+
+        # Update existing rows to have the current timestamp
+        update_existing_query = """
+            UPDATE conversations 
+            SET updated_at = COALESCE(last_user_message_at, created_at, NOW())
+            WHERE updated_at IS NULL
+        """
+        execute_query(update_existing_query)
+        logger.info("✅ Updated existing conversation rows with timestamp")
+
+        # Create trigger to automatically update the timestamp
+        trigger_query = """
+            CREATE OR REPLACE TRIGGER update_conversations_updated_at
+            BEFORE UPDATE ON conversations
+            FOR EACH ROW
+            EXECUTE FUNCTION update_modified_column();
+        """
+        execute_query(trigger_query)
+        logger.info("✅ Created trigger for automatic timestamp updates")
+
+        logger.info("✅ Conversations updated_at column fix completed")
+
+    except Exception as e:
+        logger.error(f"Failed to add updated_at column to conversations: {e}")
+        # Don't raise - this is a migration, let the app continue
