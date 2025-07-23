@@ -67,6 +67,57 @@ class AsyncLoopManager:
 # Global loop manager instance
 loop_manager = AsyncLoopManager()
 
+# Migration lock to prevent concurrent execution
+_migration_lock = threading.Lock()
+_migrations_completed = False
+
+
+def _run_migrations_once() -> None:
+    """
+    Run database migrations only once, even with multiple Gunicorn workers.
+    Uses a global lock to prevent race conditions.
+    """
+    global _migrations_completed
+    
+    with _migration_lock:
+        if _migrations_completed:
+            logger.info("📋 Migrations already completed by another worker")
+            return
+        
+        try:
+            logger.info("🔧 Running database migrations (worker-safe)...")
+            
+            # Apply database migrations
+            logger.info("📝 Applying conversation table fix...")
+            db.apply_conversation_table_fix()
+            
+            # Apply enhanced UX migration
+            logger.info("📝 Applying enhanced UX migration...")
+            db.apply_enhanced_ux_migration()
+            
+            # Apply unread tracking migration
+            logger.info("📝 Applying unread tracking migration...")
+            db.apply_unread_tracking_migration()
+            
+            # Apply conversations updated_at fix
+            logger.info("📝 Applying conversations updated_at fix...")
+            db.apply_conversations_updated_at_fix()
+            
+            # Apply database views and functions
+            logger.info("📝 Applying database views and functions...")
+            db.apply_database_views_and_functions()
+            
+            # Apply performance indexes migration
+            logger.info("📝 Applying performance indexes migration...")
+            db.apply_performance_indexes_migration()
+            
+            _migrations_completed = True
+            logger.info("✅ All database migrations completed successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Migration failed: {e}")
+            raise
+
 
 def create_flask_app() -> Flask:
     """
@@ -88,35 +139,8 @@ def create_flask_app() -> Flask:
 
     init_connection_pool()
 
-    # Apply database migrations
-    logger.info("🔧 About to run database migration...")
-    db.apply_conversation_table_fix()
-    logger.info("✅ Database migration completed successfully")
-
-    # Apply enhanced UX migration
-    logger.info("🔧 Applying enhanced UX migration...")
-    db.apply_enhanced_ux_migration()
-    logger.info("✅ Enhanced UX migration completed")
-
-    # Apply unread tracking migration
-    logger.info("🔧 Applying unread tracking migration...")
-    db.apply_unread_tracking_migration()
-    logger.info("✅ Unread tracking migration completed")
-
-    # Apply conversations updated_at fix
-    logger.info("🔧 Applying conversations updated_at fix...")
-    db.apply_conversations_updated_at_fix()
-    logger.info("✅ Conversations updated_at fix completed")
-
-    # Apply database views and functions
-    logger.info("🔧 Applying database views and functions...")
-    db.apply_database_views_and_functions()
-    logger.info("✅ Database views and functions applied")
-
-    # Apply performance indexes migration
-    logger.info("🔧 Applying performance indexes migration...")
-    db.apply_performance_indexes_migration()
-    logger.info("✅ Performance indexes migration completed")
+    # Apply database migrations with lock to prevent concurrent execution
+    _run_migrations_once()
 
     # Ensure we have sample products for testing
     logger.info("🛍️ Ensuring sample products exist...")
