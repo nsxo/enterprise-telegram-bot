@@ -1,10 +1,10 @@
 🚀 Manual Deployment Trigger
 =========================
-Timestamp: 2025-01-27T16:00:00Z
-Commit: 47f8feb
+Timestamp: 2025-01-27T16:15:00Z
+Commit: bot-factory-fix-v2
 Branch: main
 Deployed by: nsxo
 Host: MacBookPro
 
-This file triggers Railway to deploy the latest code.
-Bot factory fix applied - removed disable_web_page_preview parameter.
+CRITICAL FIX: Remove timeout parameter from Defaults.
+Force complete rebuild to clear Railway cache.
