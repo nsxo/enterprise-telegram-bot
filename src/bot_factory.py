@@ -16,11 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 async def create_application() -> Application:
-    """
-    Create and configure the Telegram bot application instance.
-
-    This function sets up the bot, loads all plugins, registers their
-    handlers, and initializes the application.
+    """Create and configure the Telegram application with plugin system.
 
     Returns:
         The configured Application instance.
@@ -33,41 +29,31 @@ async def create_application() -> Application:
         quote=True,
     )
 
-    # Create the application instance
-    application = Application.builder().token(BOT_TOKEN).defaults(defaults).build()
+    # Create the Application instance
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .defaults(defaults)
+        .concurrent_updates(True)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
 
-    # Create and configure the Plugin Manager
-    plugin_manager = PluginManager()
-    plugin_manager.register_application(application)
-
-    # Discover and initialize all plugins
-    try:
-        await plugin_manager.discover_plugins()
-        await plugin_manager.initialize_all_plugins()
-
-        # Register all plugin handlers
-        plugin_manager.register_all_handlers()
-
-        # Enable all plugins
-        await plugin_manager.enable_all_plugins()
-
-        # Store the plugin manager in the bot context for runtime access
-        application.bot_data["plugin_manager"] = plugin_manager
-
-        logger.info("✅ All plugins loaded and handlers registered successfully")
-
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize plugin system: {e}", exc_info=True)
-        # You might want to handle this more gracefully in production
-        # e.g., run with core plugins only or exit
-
-    # --- Register Core Handlers (that are not part of plugins) ---
-
-    # Example: A master error handler
-    # from src.handlers import error_handlers
-    # application.add_error_handler(error_handlers.master_error_handler)
-
-    logger.info("✅ Bot application created successfully")
+    # TEMPORARY: Skip plugin system for debugging
+    logger.info("⚠️ DEBUGGING MODE: Skipping plugin system initialization")
+    
+    # Add a simple /start handler for testing
+    from telegram import Update
+    from telegram.ext import CommandHandler, ContextTypes
+    
+    async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /start command."""
+        await update.message.reply_text("🤖 Bot is working! Plugin system disabled for debugging.")
+    
+    application.add_handler(CommandHandler("start", start_command))
+    
+    logger.info("✅ Basic bot application created (plugin system disabled)")
     return application
 
 
