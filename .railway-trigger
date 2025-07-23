@@ -1,10 +1,11 @@
 🚀 Manual Deployment Trigger
 =========================
-Timestamp: 2025-01-27T16:15:00Z
-Commit: bot-factory-fix-v2
+Timestamp: 2025-01-27T16:30:00Z
+Commit: post-init-fix-v3
 Branch: main
 Deployed by: nsxo
 Host: MacBookPro
 
-CRITICAL FIX: Remove timeout parameter from Defaults.
-Force complete rebuild to clear Railway cache.
+CRITICAL FIX: Added missing post_init and post_shutdown functions.
+Clear Railway cache - force complete rebuild.
+Simplified bot without plugin system for debugging.
